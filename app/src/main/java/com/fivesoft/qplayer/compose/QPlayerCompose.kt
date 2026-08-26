@@ -1,5 +1,6 @@
 package com.fivesoft.qplayer.compose
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.MutableFloatState
@@ -21,6 +22,7 @@ import java.net.URI
 data class QPlayerState(
     val playback: MutableState<Boolean> = mutableStateOf(true),
     val bufferLatency: MutableIntState = mutableIntStateOf(QPlayer.DEFAULT_BUFFER_LATENCY),
+    val decoderLowLatencyMode: MutableState<Boolean> = mutableStateOf(QPlayer.DEFAULT_LOW_LATENCY_MODE),
     val mediaSource: MutableState<URI> = mutableStateOf(URI.create("")),
     val authentication: MutableState<Authentication?> = mutableStateOf(null),
     val videoEnabled: MutableState<Boolean> = mutableStateOf(true),
@@ -41,27 +43,29 @@ fun QPlayerCompose(
     modifier: Modifier = Modifier,
     state: QPlayerState = rememberQPlayerState(),
 ) {
-    AndroidView(
-        factory = { context ->
-            QPlayerView(context).apply {
+    Box(
+        modifier = modifier
+    ) {
+        AndroidView(
+            factory = { context -> QPlayerView(context) },
+            update = { view ->
+                view.setBufferLatency(state.bufferLatency.intValue.toLong())
+                view.setDecoderLowLatency(state.decoderLowLatencyMode.value)
+                view.setAuthentication(state.authentication.value)
+                view.setVideoEnabled(state.videoEnabled.value)
+                view.setAudioEnabled(state.audioEnabled.value)
+                view.setSubtitlesEnabled(state.subtitlesEnabled.value)
+                view.setKeepScreenOnMode(state.keepScreenOnMode.value)
+                view.setFirstFramesCount(state.firstFramesCount.intValue)
+                view.setConnectTimeout(state.connectTimeout.intValue)
+                view.setReadTimeout(state.readTimeout.intValue)
+                view.setVolume(state.volume.floatValue)
+                view.setMediaSource(state.mediaSource.value)
+                view.setPlayback(state.playback.value)
+            },
+            onRelease = { view -> view.release() },
+            modifier = Modifier.fillMaxSize()
+        )
+    }
 
-            }
-        },
-        update = { view ->
-            view.setPlayback(state.playback.value)
-            view.setBufferLatency(state.bufferLatency.intValue.toLong())
-            view.setMediaSource(state.mediaSource.value)
-            view.setAuthentication(state.authentication.value)
-            view.setVideoEnabled(state.videoEnabled.value)
-            view.setAudioEnabled(state.audioEnabled.value)
-            view.setSubtitlesEnabled(state.subtitlesEnabled.value)
-            view.setKeepScreenOnMode(state.keepScreenOnMode.value)
-            view.setFirstFramesCount(state.firstFramesCount.intValue)
-            view.setConnectTimeout(state.connectTimeout.intValue)
-            view.setReadTimeout(state.readTimeout.intValue)
-            view.setVolume(state.volume.floatValue)
-        },
-        onRelease = { view -> view.release() },
-        modifier = modifier.fillMaxSize()
-    )
 }
