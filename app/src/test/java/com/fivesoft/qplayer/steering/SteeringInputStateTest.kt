@@ -1,6 +1,8 @@
 package com.fivesoft.qplayer.steering
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SteeringInputStateTest {
@@ -62,6 +64,57 @@ class SteeringInputStateTest {
                 requireNotNull(LogitechG920ReportParser.parse(report, report.size)).gear
             )
         }
+    }
+
+    @Test
+    fun nativeG920ReportDecodesBothShiftPaddles() {
+        val shiftUpReport = neutralG920Report().apply { this[2] = 0x01 }
+        val shiftDownReport = neutralG920Report().apply { this[2] = 0x02 }
+
+        val shiftUp = requireNotNull(
+            LogitechG920ReportParser.parse(shiftUpReport, shiftUpReport.size)
+        )
+        val shiftDown = requireNotNull(
+            LogitechG920ReportParser.parse(shiftDownReport, shiftDownReport.size)
+        )
+
+        assertTrue(shiftUp.shiftUpPressed)
+        assertFalse(shiftUp.shiftDownPressed)
+        assertFalse(shiftDown.shiftUpPressed)
+        assertTrue(shiftDown.shiftDownPressed)
+    }
+
+    @Test
+    fun heldPaddleChangesOnlyOneGear() {
+        val selector = PaddleGearSelector()
+
+        assertEquals(SteeringGear.First, selector.update(SteeringGear.Neutral, true, false))
+        assertEquals(SteeringGear.First, selector.update(SteeringGear.Neutral, true, false))
+        assertEquals(SteeringGear.First, selector.update(SteeringGear.Neutral, false, false))
+        assertEquals(SteeringGear.Second, selector.update(SteeringGear.Neutral, true, false))
+    }
+
+    @Test
+    fun paddlesShiftAcrossReverseNeutralAndForwardGears() {
+        val selector = PaddleGearSelector()
+
+        assertEquals(SteeringGear.Reverse, selector.update(SteeringGear.Neutral, false, true))
+        selector.update(SteeringGear.Neutral, false, false)
+        assertEquals(SteeringGear.Neutral, selector.update(SteeringGear.Neutral, true, false))
+        selector.update(SteeringGear.Neutral, false, false)
+        assertEquals(SteeringGear.First, selector.update(SteeringGear.Neutral, true, false))
+        selector.update(SteeringGear.Neutral, false, false)
+        assertEquals(SteeringGear.Neutral, selector.update(SteeringGear.Neutral, false, true))
+    }
+
+    @Test
+    fun hShifterOverridesPaddleSelectedGear() {
+        val selector = PaddleGearSelector()
+        selector.update(SteeringGear.Neutral, true, false)
+        selector.update(SteeringGear.Neutral, false, false)
+
+        assertEquals(SteeringGear.Fifth, selector.update(SteeringGear.Fifth, true, false))
+        assertEquals(SteeringGear.Neutral, selector.update(SteeringGear.Neutral, false, false))
     }
 
     @Test

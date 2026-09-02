@@ -14,6 +14,7 @@ class LogitechG920Controller(context: Context) : InputManager.InputDeviceListene
     private val appContext = context.applicationContext
     private val inputManager = appContext.getSystemService(InputManager::class.java)
     private val mutableState = MutableStateFlow(SteeringInputState())
+    private val paddleGearSelector = PaddleGearSelector()
     private val usbTransport = LogitechG920UsbTransport(
         context = appContext,
         listener = object : LogitechG920UsbTransport.Listener {
@@ -74,6 +75,7 @@ class LogitechG920Controller(context: Context) : InputManager.InputDeviceListene
         usbDeviceName = null
         usbStatusMessage = null
         usbInputAvailable = false
+        paddleGearSelector.reset()
         mutableState.value = SteeringInputState()
     }
 
@@ -179,10 +181,12 @@ class LogitechG920Controller(context: Context) : InputManager.InputDeviceListene
         usbDeviceName = deviceName
         usbStatusMessage = null
         usbInputAvailable = true
+        paddleGearSelector.reset()
         mutableState.value = SteeringInputState(
             connected = true,
             inputAvailable = true,
-            deviceName = deviceName
+            deviceName = deviceName,
+            gear = SteeringGear.Neutral
         )
     }
 
@@ -190,6 +194,11 @@ class LogitechG920Controller(context: Context) : InputManager.InputDeviceListene
     private fun updateUsbInput(report: LogitechG920Report) {
         if (!started) return
         usbInputAvailable = true
+        val selectedGear = paddleGearSelector.update(
+            shifterGear = report.gear,
+            shiftUpPressed = report.shiftUpPressed,
+            shiftDownPressed = report.shiftDownPressed
+        )
         mutableState.value = SteeringInputState(
             connected = true,
             inputAvailable = true,
@@ -197,7 +206,7 @@ class LogitechG920Controller(context: Context) : InputManager.InputDeviceListene
             steering = report.steering,
             accelerator = report.accelerator,
             brake = report.brake,
-            gear = report.gear
+            gear = selectedGear
         )
     }
 
@@ -206,6 +215,7 @@ class LogitechG920Controller(context: Context) : InputManager.InputDeviceListene
         usbDeviceName = null
         usbStatusMessage = null
         usbInputAvailable = false
+        paddleGearSelector.reset()
         refreshDevice()
     }
 

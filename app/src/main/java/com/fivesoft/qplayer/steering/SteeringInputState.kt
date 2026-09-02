@@ -25,6 +25,27 @@ enum class SteeringGear(val displayValue: String) {
     Sixth("6")
 }
 
+internal fun SteeringGear.shiftUp(): SteeringGear = when (this) {
+    SteeringGear.Unknown, SteeringGear.Neutral -> SteeringGear.First
+    SteeringGear.Reverse -> SteeringGear.Neutral
+    SteeringGear.First -> SteeringGear.Second
+    SteeringGear.Second -> SteeringGear.Third
+    SteeringGear.Third -> SteeringGear.Fourth
+    SteeringGear.Fourth -> SteeringGear.Fifth
+    SteeringGear.Fifth, SteeringGear.Sixth -> SteeringGear.Sixth
+}
+
+internal fun SteeringGear.shiftDown(): SteeringGear = when (this) {
+    SteeringGear.Unknown, SteeringGear.Neutral -> SteeringGear.Reverse
+    SteeringGear.Reverse -> SteeringGear.Reverse
+    SteeringGear.First -> SteeringGear.Neutral
+    SteeringGear.Second -> SteeringGear.First
+    SteeringGear.Third -> SteeringGear.Second
+    SteeringGear.Fourth -> SteeringGear.Third
+    SteeringGear.Fifth -> SteeringGear.Fourth
+    SteeringGear.Sixth -> SteeringGear.Fifth
+}
+
 internal fun normalizeSteeringAxis(
     value: Float,
     min: Float,
