@@ -1,6 +1,7 @@
 package com.fivesoft.qplayer.demo
 
 import android.os.Bundle
+import android.view.MotionEvent
 import android.view.WindowManager
 import androidx.activity.compose.setContent
 import androidx.appcompat.app.AppCompatActivity
@@ -48,12 +49,19 @@ import com.fivesoft.qplayer.compose.PlayerSize
 import com.fivesoft.qplayer.compose.QPlayerGridCompose
 import com.fivesoft.qplayer.compose.QPlayerGridState
 import com.fivesoft.qplayer.compose.QPlayerState
+import com.fivesoft.qplayer.steering.LogitechG920Controller
+import com.fivesoft.qplayer.steering.SteeringInputState
+import kotlinx.coroutines.flow.StateFlow
 import java.net.URI
 import kotlin.math.roundToInt
 
 class MainActivity : AppCompatActivity() {
+
+    private lateinit var steeringController: LogitechG920Controller
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        steeringController = LogitechG920Controller(this)
         val preferences = getSharedPreferences(PLAYER_PREFERENCES, MODE_PRIVATE)
         val savedStreamUrl = preferences.getString(PREF_STREAM_URL, STREAM_URL) ?: STREAM_URL
         val savedLatencyMs = preferences.getInt(PREF_LATENCY_MS, DEFAULT_LATENCY_MS)
@@ -68,6 +76,7 @@ class MainActivity : AppCompatActivity() {
                 initialStreamUrl = savedStreamUrl,
                 initialLatencyMs = savedLatencyMs,
                 initialDrivingMode = savedDrivingMode,
+                steeringState = steeringController.state,
                 onSettingsChanged = { streamUrl, latencyMs, drivingMode ->
                     preferences.edit()
                         .putString(PREF_STREAM_URL, streamUrl)
@@ -78,6 +87,20 @@ class MainActivity : AppCompatActivity() {
             )
         }
     }
+
+    override fun onStart() {
+        super.onStart()
+        steeringController.start()
+    }
+
+    override fun onStop() {
+        steeringController.stop()
+        super.onStop()
+    }
+
+    override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
+        return steeringController.handleMotionEvent(event) || super.dispatchGenericMotionEvent(event)
+    }
 }
 
 @Composable
@@ -85,6 +108,7 @@ private fun PlayerGrid(
     initialStreamUrl: String,
     initialLatencyMs: Int,
     initialDrivingMode: Boolean,
+    steeringState: StateFlow<SteeringInputState>,
     onSettingsChanged: (String, Int, Boolean) -> Unit
 ) {
     var streamUrl by rememberSaveable { mutableStateOf(initialStreamUrl) }
@@ -120,6 +144,7 @@ private fun PlayerGrid(
 
         if (drivingMode) {
             DrivingControlsOverlay(
+                steeringState = steeringState,
                 modifier = Modifier.align(Alignment.BottomCenter)
             )
         }
