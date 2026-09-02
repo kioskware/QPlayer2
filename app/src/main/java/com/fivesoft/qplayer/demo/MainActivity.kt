@@ -19,6 +19,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -51,6 +52,7 @@ class MainActivity : AppCompatActivity() {
         val preferences = getSharedPreferences(PLAYER_PREFERENCES, MODE_PRIVATE)
         val savedStreamUrl = preferences.getString(PREF_STREAM_URL, STREAM_URL) ?: STREAM_URL
         val savedLatencyMs = preferences.getInt(PREF_LATENCY_MS, DEFAULT_LATENCY_MS)
+        val savedDrivingMode = preferences.getBoolean(PREF_DRIVING_MODE, DEFAULT_DRIVING_MODE)
 
         window.setFlags(
             WindowManager.LayoutParams.FLAG_FULLSCREEN,
@@ -60,10 +62,12 @@ class MainActivity : AppCompatActivity() {
             PlayerGrid(
                 initialStreamUrl = savedStreamUrl,
                 initialLatencyMs = savedLatencyMs,
-                onSettingsChanged = { streamUrl, latencyMs ->
+                initialDrivingMode = savedDrivingMode,
+                onSettingsChanged = { streamUrl, latencyMs, drivingMode ->
                     preferences.edit()
                         .putString(PREF_STREAM_URL, streamUrl)
                         .putInt(PREF_LATENCY_MS, latencyMs)
+                        .putBoolean(PREF_DRIVING_MODE, drivingMode)
                         .apply()
                 }
             )
@@ -75,10 +79,12 @@ class MainActivity : AppCompatActivity() {
 private fun PlayerGrid(
     initialStreamUrl: String,
     initialLatencyMs: Int,
-    onSettingsChanged: (String, Int) -> Unit
+    initialDrivingMode: Boolean,
+    onSettingsChanged: (String, Int, Boolean) -> Unit
 ) {
     var streamUrl by rememberSaveable { mutableStateOf(initialStreamUrl) }
     var latencyMs by rememberSaveable { mutableIntStateOf(initialLatencyMs) }
+    var drivingMode by rememberSaveable { mutableStateOf(initialDrivingMode) }
     var settingsVisible by rememberSaveable { mutableStateOf(false) }
     val playerState = remember {
         QPlayerState(
@@ -107,6 +113,12 @@ private fun PlayerGrid(
             modifier = Modifier.fillMaxSize()
         )
 
+        if (drivingMode) {
+            DrivingControlsOverlay(
+                modifier = Modifier.align(Alignment.BottomCenter)
+            )
+        }
+
         IconButton(
             onClick = { settingsVisible = true },
             modifier = Modifier
@@ -128,14 +140,16 @@ private fun PlayerGrid(
         StreamSettingsDialog(
             initialStreamUrl = streamUrl,
             initialLatencyMs = latencyMs,
+            initialDrivingMode = drivingMode,
             onDismiss = { settingsVisible = false },
-            onConfirm = { streamUri, newLatencyMs ->
+            onConfirm = { streamUri, newLatencyMs, newDrivingMode ->
                 val newStreamUrl = streamUri.toString()
                 streamUrl = newStreamUrl
                 latencyMs = newLatencyMs
+                drivingMode = newDrivingMode
                 playerState.mediaSource.value = streamUri
                 playerState.bufferLatency.intValue = newLatencyMs
-                onSettingsChanged(newStreamUrl, newLatencyMs)
+                onSettingsChanged(newStreamUrl, newLatencyMs, newDrivingMode)
                 settingsVisible = false
             }
         )
@@ -146,11 +160,13 @@ private fun PlayerGrid(
 private fun StreamSettingsDialog(
     initialStreamUrl: String,
     initialLatencyMs: Int,
+    initialDrivingMode: Boolean,
     onDismiss: () -> Unit,
-    onConfirm: (URI, Int) -> Unit
+    onConfirm: (URI, Int, Boolean) -> Unit
 ) {
     var streamUrl by remember(initialStreamUrl) { mutableStateOf(initialStreamUrl) }
     var latencyMs by remember(initialLatencyMs) { mutableIntStateOf(initialLatencyMs) }
+    var drivingMode by remember(initialDrivingMode) { mutableStateOf(initialDrivingMode) }
     val streamUri = remember(streamUrl) { streamUrl.toStreamUriOrNull() }
 
     AlertDialog(
@@ -187,12 +203,26 @@ private fun StreamSettingsDialog(
                         valueRange = 0f..MAX_LATENCY_MS.toFloat()
                     )
                 }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Tryb jazdy")
+                    Switch(
+                        checked = drivingMode,
+                        onCheckedChange = { drivingMode = it }
+                    )
+                }
             }
         },
         confirmButton = {
             TextButton(
                 enabled = streamUri != null,
-                onClick = { onConfirm(requireNotNull(streamUri), latencyMs) }
+                onClick = {
+                    onConfirm(requireNotNull(streamUri), latencyMs, drivingMode)
+                }
             ) {
                 Text("Zapisz")
             }
@@ -220,7 +250,9 @@ private val PLAYER_SIZES = listOf(
 private const val PLAYER_ASPECT_RATIO = 16f / 9f
 private const val MAX_LATENCY_MS = 2_000
 private const val DEFAULT_LATENCY_MS = 0
+private const val DEFAULT_DRIVING_MODE = true
 private const val STREAM_URL = ""
 private const val PLAYER_PREFERENCES = "player_preferences"
 private const val PREF_STREAM_URL = "stream_url"
 private const val PREF_LATENCY_MS = "latency_ms"
+private const val PREF_DRIVING_MODE = "driving_mode"
