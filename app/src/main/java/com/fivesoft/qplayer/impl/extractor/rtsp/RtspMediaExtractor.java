@@ -30,8 +30,12 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InterruptedIOException;
 import java.io.OutputStream;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.Locale;
+import java.util.Objects;
 
 /*
     Based on https://github.com/alexeyvasilyev/rtsp-client-android
@@ -49,7 +53,7 @@ public class RtspMediaExtractor extends MediaExtractor {
             if(t.uri == null || t.dataSource == null || !t.dataSource.isOutSupported())
                 return 0;
 
-            if(!"rtsp".equals(t.uri.getScheme()))
+            if(!"rtsp".equalsIgnoreCase(t.uri.getScheme()))
                 return 0;
 
             return 1;
@@ -74,6 +78,8 @@ public class RtspMediaExtractor extends MediaExtractor {
 
     private volatile boolean opened = true;
     private final String uri;
+    @Nullable
+    private final Authentication uriAuthentication;
 
     private String userAgent = DEFAULT_USER_AGENT;
 
@@ -102,7 +108,9 @@ public class RtspMediaExtractor extends MediaExtractor {
 
     public RtspMediaExtractor(@NonNull DataSource dataSource, @Nullable TrackSelector trackSelector, String uri) {
         super(dataSource, trackSelector);
-        this.uri = uri;
+        URI sourceUri = URI.create(Objects.requireNonNull(uri));
+        this.uri = withoutUserInfo(sourceUri).toASCIIString();
+        this.uriAuthentication = getAuthenticationFromUri(sourceUri);
         setTimeout(5000); //Default timeout for re-preparing if needed when getting next sample
     }
 
@@ -136,15 +144,11 @@ public class RtspMediaExtractor extends MediaExtractor {
             throw new IOException("Output is not supported by this data source");
         }
 
-        rtspSession = new RtspSession(in, out, userAgent, uri, auth);
+        Authentication effectiveAuthentication = auth != null ? auth : uriAuthentication;
+        rtspSession = new RtspSession(in, out, userAgent, uri, effectiveAuthentication);
 
-        //Get capabilities
+        // OPTIONS is optional in practice. Some cameras reject it but still support DESCRIBE.
         RtspResponse res = rtspSession.options();
-
-        if (!res.isOk()) {
-            //Throw if failed to authenticate
-            throw new IOException("RTSP options failed: " + res.getCode() + " " + res.getMessage());
-        }
 
         //Get tracks
         res = rtspSession.describe();
@@ -154,16 +158,19 @@ public class RtspMediaExtractor extends MediaExtractor {
             throw new IOException("RTSP describe failed: " + res.getCode() + " " + res.getMessage());
         }
 
+        String describeBaseUri = getDescribeBaseUri(uri, res);
+        Headers describeParams;
         try {
-            Headers params = RtspUtil.getDescribeParams(res.getContentAsText());
-            updateTracks(params);
+            describeParams = RtspUtil.getDescribeParams(res.getContentAsText());
+            tracks.clear();
+            updateTracks(describeParams);
             Log.println(Log.ASSERT, "RTSPMediaSource", "Tracks: " + tracks);
         } catch (Exception e) {
             throw new IOException("Failed to parse tracks", e);
         }
 
-        String session = null, uriForSetup;
-        String cachedToken = rtspSession.getAuthToken();
+        String playUri = getAggregateControlUri(describeBaseUri, describeParams);
+        String session = null, sessionHeader = null, uriForSetup;
 
         synchronized (tracks) {
 
@@ -179,7 +186,7 @@ public class RtspMediaExtractor extends MediaExtractor {
                     continue;
                 }
 
-                uriForSetup = getUriForSetup(uri, track);
+                uriForSetup = getUriForSetup(describeBaseUri, track);
 
                 if (uriForSetup == null) {
                     continue;
@@ -195,7 +202,11 @@ public class RtspMediaExtractor extends MediaExtractor {
                     throw new IOException("RTSP setup failed: " + res.getCode() + " " + res.getMessage());
                 }
 
-                session = res.getHeader("Session");
+                String responseSessionHeader = res.getHeader("Session");
+                if (!TextUtils.isEmpty(responseSessionHeader)) {
+                    sessionHeader = responseSessionHeader;
+                }
+                session = rtspSession.getSession();
             }
         }
 
@@ -203,17 +214,17 @@ public class RtspMediaExtractor extends MediaExtractor {
             throw new IOException("Failed to get RTSP session");
         }
 
-        res = rtspSession.play(session);
-        rtspSession.setAuthToken(cachedToken);
+        res = rtspSession.play(playUri, session);
 
         if (!res.isOk()) {
             //Throw if failed to play
             throw new IOException("RTSP play failed: " + res.getCode() + " " + res.getMessage());
         }
 
-        updateSessionTimeout(session);
+        updateSessionTimeout(sessionHeader);
         lastKeepAliveSent = System.currentTimeMillis();
 
+        opened = true;
         prepared = true;
     }
 
@@ -252,12 +263,23 @@ public class RtspMediaExtractor extends MediaExtractor {
                 }
                 return null;
             }
+            failedReadHeaderCount = 0;
 
             if (header.payloadSize > readBuffer.length || !isReuseBuffersAllowed()) {
                 readBuffer = new byte[header.payloadSize];
             }
 
-            NetUtils.readData(inputStream, readBuffer, 0, header.payloadSize);
+            if (NetUtils.readData(inputStream, readBuffer, 0, header.payloadSize) != header.payloadSize) {
+                throw new IOException("Unexpected end of RTP packet");
+            }
+
+            int sampleLength = header.payloadSize;
+            if (header.padding != 0 && sampleLength > 0) {
+                int paddingLength = readBuffer[sampleLength - 1] & 0xFF;
+                if (paddingLength > 0 && paddingLength <= sampleLength) {
+                    sampleLength -= paddingLength;
+                }
+            }
 
             Track track = tracks.getByPayloadType(header.payloadType);
 
@@ -272,7 +294,7 @@ public class RtspMediaExtractor extends MediaExtractor {
             }
 
             lastTimestamp = timestamp;
-            return new Sample(readBuffer, timestamp, track);
+            return new Sample(readBuffer, 0, sampleLength, timestamp, track);
         }
     }
 
@@ -342,44 +364,118 @@ public class RtspMediaExtractor extends MediaExtractor {
     }
 
     private void updateSessionTimeout(@Nullable String session) {
-
-        if (!TextUtils.isEmpty(session)) {
-            // ODgyODg3MjQ1MDczODk3NDk4Nw;timeout=30
-            String[] params = TextUtils.split(session, ";");
-            // Getting session timeout
-            if (params.length > 1) {
-                params = TextUtils.split(params[1], "=");
-                if (params.length > 1) {
-                    try {
-                        sessionTimeout = Integer.parseInt(params[1]);
-                    } catch (Exception e) {
-                        Log.e("RTSPMediaSource", "Failed to parse RTSP session timeout");
-                    }
-                }
-            }
-        }
+        sessionTimeout = RtspUtil.getSessionTimeoutSeconds(session, 0);
         Log.println(Log.ASSERT, "RTSPMediaSource", "Session timeout: " + sessionTimeout);
-
     }
 
     @Nullable
-    private static String getUriForSetup(@NonNull String uri, @Nullable Track track) {
+    static String getUriForSetup(@NonNull String uri, @Nullable Track track) {
         if (track == null || TextUtils.isEmpty(track.getId()))
             return null;
+        return resolveControlUri(uri, track.getId());
+    }
 
-        String res = uri;
-        if (track.getId().startsWith("rtsp://") ||
-                track.getId().startsWith("rtsps://")) {
-            // Absolute URL
-            res = track.getId();
-        } else {
-            // Relative URL
-            if (!track.getId().startsWith("/")) {
-                res += "/";
-            }
-            res += track.getId();
+    @NonNull
+    static String resolveControlUri(@NonNull String baseUri, @Nullable String control) {
+        if (control == null || control.trim().isEmpty() || "*".equals(control.trim())) {
+            return baseUri;
         }
-        return res;
+
+        String value = control.trim();
+        URI controlUri = URI.create(value);
+        if (controlUri.isAbsolute()) {
+            return withoutUserInfo(controlUri).toASCIIString();
+        }
+
+        URI base = URI.create(baseUri);
+        String controlPath = controlUri.getPath();
+        String path;
+        if (controlPath != null && controlPath.startsWith("/")) {
+            path = controlPath;
+        } else {
+            String basePath = base.getPath();
+            if (basePath == null || basePath.isEmpty()) {
+                basePath = "/";
+            } else if (!basePath.endsWith("/")) {
+                basePath += "/";
+            }
+            path = basePath + (controlPath == null ? "" : controlPath);
+        }
+        String query = controlUri.getQuery() == null ? base.getQuery() : controlUri.getQuery();
+        try {
+            return new URI(
+                    base.getScheme(),
+                    null,
+                    base.getHost(),
+                    base.getPort(),
+                    path,
+                    query,
+                    null
+            ).toASCIIString();
+        } catch (URISyntaxException e) {
+            throw new IllegalArgumentException("Invalid RTSP control URI", e);
+        }
+    }
+
+    @NonNull
+    private static String getDescribeBaseUri(@NonNull String requestUri, @NonNull RtspResponse response) {
+        String base = response.getHeader("Content-Base");
+        if (TextUtils.isEmpty(base)) {
+            base = response.getHeader("Content-Location");
+        }
+        if (TextUtils.isEmpty(base)) {
+            return requestUri;
+        }
+        return URI.create(requestUri).resolve(base.trim()).toASCIIString();
+    }
+
+    @NonNull
+    private static String getAggregateControlUri(@NonNull String baseUri, @NonNull Headers params) {
+        for (Header param : params) {
+            if (param == null || param.name == null || param.value == null) {
+                continue;
+            }
+            if ("m".equalsIgnoreCase(param.name)) {
+                break;
+            }
+            if ("a".equalsIgnoreCase(param.name) &&
+                    param.value.regionMatches(true, 0, "control:", 0, 8)) {
+                return resolveControlUri(baseUri, param.value.substring(8));
+            }
+        }
+        return baseUri;
+    }
+
+    @Nullable
+    private static Authentication getAuthenticationFromUri(@NonNull URI uri) {
+        String userInfo = uri.getUserInfo();
+        if (TextUtils.isEmpty(userInfo)) {
+            return null;
+        }
+        int separator = userInfo.indexOf(':');
+        String username = separator < 0 ? userInfo : userInfo.substring(0, separator);
+        String password = separator < 0 ? null : userInfo.substring(separator + 1);
+        return new Authentication(username, password);
+    }
+
+    @NonNull
+    private static URI withoutUserInfo(@NonNull URI uri) {
+        if (uri.getRawUserInfo() == null) {
+            return uri;
+        }
+        try {
+            return new URI(
+                    uri.getScheme(),
+                    null,
+                    uri.getHost(),
+                    uri.getPort(),
+                    uri.getPath(),
+                    uri.getQuery(),
+                    uri.getFragment()
+            );
+        } catch (URISyntaxException e) {
+            throw new IllegalArgumentException("Invalid RTSP URI", e);
+        }
     }
 
     private void updateTracks(@NonNull Headers params) throws InterruptedIOException {
@@ -387,17 +483,23 @@ public class RtspMediaExtractor extends MediaExtractor {
         int trackCount = 0;
         for (Header param : params) {
             Util.checkInterrupted();
-            switch (param.name) {
+            if (param == null || param.name == null || param.value == null) {
+                continue;
+            }
+            String name = param.name.toLowerCase(Locale.US);
+            String value = param.value.trim();
+            switch (name) {
                 case "m": {
-                    if (param.value.startsWith("video")) {
+                    addTrack(cb);
+                    if (value.regionMatches(true, 0, "video", 0, 5)) {
                         cb = new Track.Builder(Track.VIDEO);
-                    } else if (param.value.startsWith("audio")) {
+                    } else if (value.regionMatches(true, 0, "audio", 0, 5)) {
                         cb = new AudioTrack.Builder(Track.AUDIO);
                     } else {
                         cb = null;
                     }
                     if (cb != null) {
-                        String[] values = TextUtils.split(param.value, " ");
+                        String[] values = value.split("\\s+");
                         try {
                             cb.setPayloadType(values.length > 3 ? Integer.parseInt(values[3]) : -1);
                         } catch (Exception e) {
@@ -408,110 +510,95 @@ public class RtspMediaExtractor extends MediaExtractor {
                     break;
                 }
                 case "a": {
-                    // a=control:trackID=1
                     if (cb != null) {
-                        if (param.value.startsWith("control:")) {
-                            cb.setId(param.value.substring(8));
-                            synchronized (tracks) {
-                                Track track = cb.build();
-                                if (track != null) {
-                                    tracks.put(track);
-                                }
-                            }
-                        } else if (param.value.startsWith("fmtp:")) {
-                            // a=fmtp:96 packetization-mode=1; profile-level-id=4D4029; sprop-parameter-sets=Z01AKZpmBkCb8uAtQEBAQXpw,aO48gA==
-                            // a=fmtp:97 streamtype=5; profile-level-id=15; mode=AAC-hbr; config=1408; sizeLength=13; indexLength=3; indexDeltaLength=3; profile=1; bitrate=32000;
-                            // a=fmtp:97 streamtype=5;profile-level-id=1;mode=AAC-hbr;sizelength=13;indexlength=3;indexdeltalength=3;config=1408
-                            // a=fmtp:96 streamtype=5; profile-level-id=14; mode=AAC-lbr; config=1388; sizeLength=6; indexLength=2; indexDeltaLength=2; constantDuration=1024; maxDisplacement=5
-                            // a=fmtp:96 profile-level-id=1;mode=AAC-hbr;sizelength=13;indexlength=3;indexdeltalength=3;config=1210fff15081ffdffc
-                            // a=fmtp:96
-                            String temp = param.value.substring(5).trim();
-                            int index = temp.indexOf(" ");
-                            if (index != -1) {
-                                temp = temp.substring(0, index);
-                            }
-                            temp = temp.trim();
-
-                            String payloadType = temp;
-                            String paramsString;
-
-                            if(index != -1) {
-                                paramsString = param.value.substring(index + 1).trim();
-                            } else {
-                                paramsString = "";
-                            }
-
-                            parseRtspParamString(paramsString, cb);
-                        } else if (param.value.startsWith("rtpmap:")) {
-                            // a=rtpmap:96 H264/90000
-                            // a=rtpmap:97 mpeg4-generic/16000/1
-                            // a=rtpmap:97 MPEG4-GENERIC/16000
-                            // a=rtpmap:97 G726-32/8000
-                            // a=rtpmap:96 mpeg4-generic/44100/2
-                            String[] values = TextUtils.split(param.value, " ");
-                            if (cb.getType() == Track.VIDEO) {
-                                // Video
-                                if (values.length > 1) {
-                                    values = TextUtils.split(values[1], "/");
-                                    if (values.length > 0) {
-                                        cb.setFormat(values[0].toLowerCase());
-                                    }
-                                    if (values.length > 1) {
-                                        try {
-                                            cb.setClockRate(Integer.parseInt(values[1]));
-                                        } catch (Exception e) {
-                                            cb.setClockRate(Constants.UNKNOWN_VALUE);
-                                        }
-                                    }
-                                }
-                            } else if (cb.getType() == Track.AUDIO) {
-                                // Audio
-                                if (values.length > 1) {
-                                    values = TextUtils.split(values[1], "/");
-                                    if (values.length > 1) {
-                                        cb.setFormat(values[0].toLowerCase());
-                                        try {
-                                            cb.setClockRate(Integer.parseInt(values[1]));
-                                        } catch (NumberFormatException e) {
-                                            cb.setClockRate(Constants.UNKNOWN_VALUE);
-                                        }
-                                        // If no channels specified, use mono, e.g. "a=rtpmap:97 MPEG4-GENERIC/8000"
-                                        cb.setChannels(values.length > 2 ? Integer.parseInt(values[2]) : 1);
-                                    }
-                                }
-                            }
+                        if (value.regionMatches(true, 0, "control:", 0, 8)) {
+                            cb.setId(value.substring(8).trim());
+                        } else if (value.regionMatches(true, 0, "fmtp:", 0, 5)) {
+                            int separator = firstWhitespace(value, 5);
+                            parseRtspParamString(
+                                    separator < 0 ? "" : value.substring(separator + 1).trim(),
+                                    cb
+                            );
+                        } else if (value.regionMatches(true, 0, "rtpmap:", 0, 7)) {
+                            parseRtpMap(value, cb);
                         }
                     }
                     break;
                 }
                 case "s": {
                     if (cb != null) {
-                        cb.setTitle(param.value);
+                        cb.setTitle(value);
                     }
                     break;
                 }
                 case "i": {
                     if (cb != null) {
-                        cb.setDescription(param.value);
+                        cb.setDescription(value);
                     }
                     break;
                 }
             }
         }
+        addTrack(cb);
+    }
+
+    private void addTrack(@Nullable Track.Builder builder) {
+        if (builder == null || TextUtils.isEmpty(builder.getId())) {
+            return;
+        }
+        Track track = builder.build();
+        if (track != null) {
+            synchronized (tracks) {
+                tracks.put(track);
+            }
+        }
+    }
+
+    private static int firstWhitespace(@NonNull String value, int start) {
+        for (int i = start; i < value.length(); i++) {
+            if (Character.isWhitespace(value.charAt(i))) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private static void parseRtpMap(@NonNull String value, @NonNull Track.Builder target) {
+        String[] fields = value.split("\\s+", 2);
+        if (fields.length < 2) {
+            return;
+        }
+        String[] encoding = fields[1].trim().split("/");
+        if (encoding.length == 0) {
+            return;
+        }
+        target.setFormat(encoding[0].toLowerCase(Locale.US));
+        if (encoding.length > 1) {
+            try {
+                target.setClockRate(Integer.parseInt(encoding[1]));
+            } catch (NumberFormatException e) {
+                target.setClockRate(Constants.UNKNOWN_VALUE);
+            }
+        }
+        if (target.getType() == Track.AUDIO) {
+            int channels = 1;
+            if (encoding.length > 2) {
+                try {
+                    channels = Integer.parseInt(encoding[2]);
+                } catch (NumberFormatException ignored) {
+                    channels = Constants.UNKNOWN_VALUE;
+                }
+            }
+            target.setChannels(channels);
+        }
     }
 
     private static void parseRtspParamString(@NonNull String input, @NonNull Track.Builder target) {
-        Log.println(Log.ASSERT, "", "parseRtspParamString: " + input);
-        // Split the input string by semicolon (;)
         String[] keyValuePairs = input.split(";");
 
-        // Iterate through each key-value pair
         for (String pair : keyValuePairs) {
-            Log.println(Log.ASSERT, "", "pair: " + pair);
-            // Split each pair by equals (=)
-            String[] keyValue = pair.trim().split("=");
+            String[] keyValue = pair.trim().split("=", 2);
 
-            // Ensure the pair has a key and a value
             if (keyValue.length == 2) {
                 String key = keyValue[0].trim();
                 String value = keyValue[1].trim();
@@ -525,14 +612,12 @@ public class RtspMediaExtractor extends MediaExtractor {
                             target.setCsd(0, sps);
                             target.setCsd(1, pps);
                         }
-                    } catch (Exception e) {
-                        e.printStackTrace();
+                    } catch (Exception ignored) {
                     }
                 } else if ("config".equalsIgnoreCase(key)) {
                     try {
                         target.setCsd(0, Util.getBytesFromHexString(value));
-                    } catch (Exception e) {
-                        e.printStackTrace();
+                    } catch (Exception ignored) {
                     }
                 } else if ("mode".equalsIgnoreCase(key)) {
                     target.setMode(value);

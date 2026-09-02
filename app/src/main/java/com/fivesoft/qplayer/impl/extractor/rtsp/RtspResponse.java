@@ -5,6 +5,7 @@ import androidx.annotation.NonNull;
 import com.fivesoft.qplayer.common.Headers;
 import com.fivesoft.qplayer.common.ResponseHeader;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 
 public class RtspResponse {
@@ -21,7 +22,7 @@ public class RtspResponse {
     }
 
     public String getContentAsText() {
-        return new String(content);
+        return new String(content, StandardCharsets.UTF_8);
     }
 
     public String getHeader(String name) {
@@ -29,15 +30,15 @@ public class RtspResponse {
     }
 
     public Headers getHeaders() {
-        return header.headers;
+        return header.getHeaders();
     }
 
     public int getCode() {
-        return header.code;
+        return header.getCode();
     }
 
     public String getMessage() {
-        return header.message;
+        return header.getMessage();
     }
 
     public boolean isOk() {

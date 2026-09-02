@@ -17,6 +17,7 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.SocketAddress;
 import java.net.URI;
+import java.util.Locale;
 import java.util.Objects;
 
 public class SocketDataSource extends DataSource {
@@ -32,6 +33,7 @@ public class SocketDataSource extends DataSource {
             String scheme = t.getScheme();
             if (scheme == null)
                 return 0;
+            scheme = scheme.toLowerCase(Locale.US);
 
             int port = t.getPort();
 

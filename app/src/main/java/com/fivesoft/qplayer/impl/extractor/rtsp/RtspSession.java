@@ -1,23 +1,25 @@
 package com.fivesoft.qplayer.impl.extractor.rtsp;
 
-import android.text.TextUtils;
-
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import com.fivesoft.qplayer.base.Authentication;
 import com.fivesoft.qplayer.common.Constants;
 import com.fivesoft.qplayer.common.Credentials;
+import com.fivesoft.qplayer.common.NetUtils;
 import com.fivesoft.qplayer.common.ResponseHeader;
 import com.fivesoft.qplayer.common.Util;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class RtspSession {
+
+    private static final int MAX_RESPONSE_CONTENT_LENGTH = 4 * 1024 * 1024;
 
     private final InputStream in;
     private final OutputStream out;
@@ -28,6 +30,8 @@ public class RtspSession {
 
     private final Authentication auth;
     private String authToken;
+    private RealmNonce digestChallenge;
+    private long digestNonceCount;
     private String session;
 
     private int capabilities = 0;
@@ -39,6 +43,9 @@ public class RtspSession {
         this.userAgent = userAgent;
         this.uri = Objects.requireNonNull(uri);
         this.auth = auth;
+        if (auth != null && auth.token != null) {
+            this.authToken = new String(auth.token, StandardCharsets.ISO_8859_1);
+        }
     }
 
     public int getCapabilities() {
@@ -50,7 +57,7 @@ public class RtspSession {
     }
 
     public void setSession(String session) {
-        this.session = session;
+        this.session = RtspUtil.getSessionId(session);
     }
 
     public String getSession() {
@@ -59,6 +66,8 @@ public class RtspSession {
 
     public void setAuthToken(String authToken) {
         this.authToken = authToken;
+        this.digestChallenge = null;
+        this.digestNonceCount = 0;
     }
 
     public String getAuthToken() {
@@ -66,11 +75,16 @@ public class RtspSession {
     }
 
     public RtspResponse sendKeepAlive() throws IOException {
-        if (hasCapability(RtspUtil.RTSP_CAPABILITY_GET_PARAMETER)) {
-            return sendCommandBasic("GET_PARAMETER", session, authToken, uri, false);
-        } else {
-            return sendCommandBasic("OPTIONS", session, authToken, uri, false);
-        }
+        String command = hasCapability(RtspUtil.RTSP_CAPABILITY_GET_PARAMETER)
+                ? "GET_PARAMETER"
+                : "OPTIONS";
+        return sendCommandBasic(
+                command,
+                session,
+                createAuthToken(command, uri),
+                uri,
+                false
+        );
     }
 
     public RtspResponse options() throws IOException {
@@ -161,17 +175,25 @@ public class RtspSession {
         Util.checkInterrupted();
 
         ResponseHeader header = RtspUtil.readResponseHeader(in);
-        int cl = RtspUtil.getHeaderContentLength(header.headers);
+        int cl = RtspUtil.getHeaderContentLength(header.getHeaders());
+        if (cl > MAX_RESPONSE_CONTENT_LENGTH) {
+            throw new IOException("RTSP response is too large: " + cl + " bytes");
+        }
         byte[] content = new byte[Math.max(0, cl)];
 
         if(cl > 0) {
-            int read = in.read(content);
+            int read = NetUtils.readData(in, content, 0, cl);
             if(read != cl) {
                 throw new IOException("Unexpected end of stream");
             }
         }
 
-        session = header.headers.get("Session");
+        String responseSession = RtspUtil.getSessionId(header.getHeaders().get("Session"));
+        if (responseSession != null) {
+            session = responseSession;
+        }
+
+        updateCapabilities(header);
 
         return new RtspResponse(header, content);
     }
@@ -182,34 +204,42 @@ public class RtspSession {
 
         Util.checkInterrupted();
 
-        StringBuilder sb = new StringBuilder();
-
-        out.write((command + " " + uri + " RTSP/1.0" + Constants.CRLF).getBytes());
+        out.write((command + " " + uri + " RTSP/1.0" + Constants.CRLF)
+                .getBytes(StandardCharsets.ISO_8859_1));
 
         if(authToken != null) {
-            out.write(("Authorization: " + authToken + Constants.CRLF).getBytes());
+            out.write(("Authorization: " + authToken + Constants.CRLF)
+                    .getBytes(StandardCharsets.ISO_8859_1));
         }
 
         if(userAgent != null) {
-            out.write(("User-Agent: " + userAgent + Constants.CRLF).getBytes());
+            out.write(("User-Agent: " + userAgent + Constants.CRLF)
+                    .getBytes(StandardCharsets.ISO_8859_1));
         }
 
-        out.write(("CSeq: " + cSeq.incrementAndGet() + Constants.CRLF).getBytes());
+        out.write(("CSeq: " + cSeq.incrementAndGet() + Constants.CRLF)
+                .getBytes(StandardCharsets.ISO_8859_1));
 
-        if (session != null) {
-            out.write(("Session: " + session + Constants.CRLF).getBytes());
+        String sessionId = RtspUtil.getSessionId(session);
+        if (sessionId != null) {
+            out.write(("Session: " + sessionId + Constants.CRLF)
+                    .getBytes(StandardCharsets.ISO_8859_1));
         }
 
+        if (headers.length % 2 != 0) {
+            throw new IllegalArgumentException("RTSP headers must be key/value pairs");
+        }
         for(int i = 0; i < headers.length; i += 2) {
             Util.checkInterrupted();
 
             String key = String.valueOf(headers[i]);
             String value = String.valueOf(headers[i + 1]);
 
-            out.write((key + ": " + value + Constants.CRLF).getBytes());
+            out.write((key + ": " + value + Constants.CRLF)
+                    .getBytes(StandardCharsets.ISO_8859_1));
         }
 
-        out.write(Constants.CRLF.getBytes());
+        out.write(Constants.CRLF.getBytes(StandardCharsets.ISO_8859_1));
         out.flush();
 
         if (waitForResponse) {
@@ -222,45 +252,70 @@ public class RtspSession {
     public RtspResponse sendCommand(@NonNull String command, @Nullable String session, @NonNull String uri,
                                     @NonNull Object... headers) throws IOException {
 
-        //Try with current auth token
-        RtspResponse res = sendCommandBasic(command, session, authToken, uri, true, headers);
+        RtspResponse res = sendCommandBasic(
+                command,
+                session,
+                createAuthToken(command, uri),
+                uri,
+                true,
+                headers
+        );
 
-        //If auth is ok, return
-        if(Objects.requireNonNull(res).header.code != 401) {
+        if(Objects.requireNonNull(res).header.getCode() != 401) {
             return res;
         }
 
-        //Try with auth
         Authentication auth = this.auth;
-
-        //If auth is null, return
         if(auth == null) {
             return res;
         }
 
         Credentials credentials = auth.credentials;
-        RealmNonce rn = RtspUtil.getHeaderWwwAuthenticateDigestRealmAndNonce(res.header.headers);
+        RealmNonce rn = RtspUtil.getHeaderWwwAuthenticateDigestRealmAndNonce(res.header.getHeaders());
 
         if(rn == null) {
-            String basicRealm = RtspUtil.getHeaderWwwAuthenticateBasicRealm(res.header.headers);
-            if (TextUtils.isEmpty(basicRealm)) {
+            String basicRealm = RtspUtil.getHeaderWwwAuthenticateBasicRealm(res.header.getHeaders());
+            if (basicRealm == null) {
                 throw new IOException("Unknown authentication type");
             }
-            // Basic auth
+            digestChallenge = null;
+            digestNonceCount = 0;
             authToken = RtspUtil.getBasicAuthHeader(credentials);
         } else {
-            // Digest auth
-            authToken = RtspUtil.getDigestAuthHeader(credentials, command, uri, rn);
+            digestChallenge = rn;
+            digestNonceCount = 0;
+            authToken = createAuthToken(command, uri);
         }
 
-        Integer capabilities = RtspUtil.getSupportedCapabilities(res.getHeaders());
-
-        if(capabilities != null) {
-            this.capabilities = capabilities;
-        }
-
-        //Try with new auth token
         return sendCommandBasic(command, session, authToken, uri, true, headers);
+    }
+
+    @Nullable
+    private String createAuthToken(@NonNull String command, @NonNull String requestUri) throws IOException {
+        RealmNonce challenge = digestChallenge;
+        if (challenge == null) {
+            return authToken;
+        }
+        Credentials credentials = auth == null ? null : auth.credentials;
+        String token = RtspUtil.getDigestAuthHeader(
+                credentials,
+                command,
+                requestUri,
+                challenge,
+                ++digestNonceCount
+        );
+        if (token == null) {
+            throw new IOException("Unsupported RTSP Digest authentication challenge");
+        }
+        authToken = token;
+        return token;
+    }
+
+    private void updateCapabilities(@NonNull ResponseHeader header) {
+        Integer responseCapabilities = RtspUtil.getSupportedCapabilities(header.getHeaders());
+        if (responseCapabilities != null) {
+            capabilities |= responseCapabilities;
+        }
     }
 
     public RtspResponse sendCommand(@NonNull String command, @NonNull String uri,
@@ -269,6 +324,9 @@ public class RtspSession {
     }
 
     public void close() {
+        if (session == null) {
+            return;
+        }
         try {
             teardown(uri, session);
         } catch (Exception e) {

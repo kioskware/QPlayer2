@@ -8,6 +8,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InterruptedIOException;
 import java.math.BigInteger;
+import java.util.Locale;
 
 public class Util {
 
@@ -112,7 +113,7 @@ public class Util {
         if (schema == null)
             return -1;
 
-        switch (schema) {
+        switch (schema.toLowerCase(Locale.US)) {
             case "http":
             case "rtmpte":
             case "rtmpt":

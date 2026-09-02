@@ -10,6 +10,7 @@ import java.io.InputStream;
 import java.io.InterruptedIOException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.nio.charset.StandardCharsets;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
@@ -128,34 +129,30 @@ public class NetUtils {
 
     @Nullable
     public static String readLine(@NonNull InputStream inputStream) throws IOException {
-//        Assert.assertNotNull("Input stream should not be null", inputStream);
         byte[] bufferLine = new byte[MAX_LINE_SIZE];
         int offset = 0;
-        int readBytes;
-        do {
-            // Didn't find "\r\n" within 4K bytes
+        while (true) {
             if (offset >= MAX_LINE_SIZE) {
                 throw new IOException("Invalid headers");
             }
 
-            // Read 1 byte
-            readBytes = inputStream.read(bufferLine, offset, 1);
-            if (readBytes == 1) {
-                // Check for EOL
-                // Some cameras like Linksys WVC200 do not send \n instead of \r\n
-                if (offset > 0 && /*bufferLine[offset-1] == '\r' &&*/ bufferLine[offset] == '\n') {
-                    // Found empty EOL. End of header section
-                    if (offset == 1)
-                        break;
-
-                    // Found EOL. Add to array.
-                    return new String(bufferLine, 0, offset-1);
-                } else {
-                    offset++;
-                }
+            int value = inputStream.read();
+            if (value < 0) {
+                return offset == 0
+                        ? null
+                        : new String(bufferLine, 0, offset, StandardCharsets.ISO_8859_1);
             }
-        } while (readBytes > 0);
-        return null;
+
+            if (value == '\n') {
+                int length = offset;
+                if (length > 0 && bufferLine[length - 1] == '\r') {
+                    length--;
+                }
+                return new String(bufferLine, 0, length, StandardCharsets.ISO_8859_1);
+            }
+
+            bufferLine[offset++] = (byte) value;
+        }
     }
 
     public static int getResponseStatusCode(@NonNull ArrayList<String> headers) {

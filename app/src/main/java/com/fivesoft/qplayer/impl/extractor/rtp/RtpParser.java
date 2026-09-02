@@ -49,8 +49,9 @@ public class RtpParser {
                 // Read 1 byte
                 NetUtils.readData(inputStream, oneByte, 0, 1);
                 if (foundFirstByte) {
-                    // Found 0x24. Checking for 0x00-0x02.
-                    if (oneByte[0] == 0x00)
+                    // Interleaved channels are one byte. A conservative range avoids
+                    // mistaking a '$' inside an RTSP text response for a packet marker.
+                    if ((oneByte[0] & 0xFF) <= 31)
                         foundSecondByte = true;
                     else
                         foundFirstByte = false;
@@ -81,11 +82,12 @@ public class RtpParser {
             // 80 c8 00 06
             rtpHeader.padding = (header[0] & 0x20) >> 5; // 0b00100100
             rtpHeader.extension = (header[0] & 0x10) >> 4;
+            rtpHeader.cc = header[0] & 0x0F;
             rtpHeader.marker = (header[1] & 0x80) >> 7;
             rtpHeader.payloadType = header[1] & 0x7F;
             rtpHeader.sequenceNumber = (header[3] & 0xFF) + ((header[2] & 0xFF) << 8);
             rtpHeader.timestamp = (header[7] & 0xFF) + ((header[6] & 0xFF) << 8) + ((header[5] & 0xFF) << 16) + ((long) (header[4] & 0xFF) << 24) & 0xffffffffL;
-            rtpHeader.ssrc = (header[7] & 0xFF) + ((header[6] & 0xFF) << 8) + ((header[5] & 0xFF) << 16) + ((long) (header[4] & 0xFF) << 24) & 0xffffffffL;
+            rtpHeader.ssrc = (header[11] & 0xFF) + ((header[10] & 0xFF) << 8) + ((header[9] & 0xFF) << 16) + ((long) (header[8] & 0xFF) << 24) & 0xffffffffL;
             rtpHeader.payloadSize = packetSize - RTP_HEADER_SIZE;
             return rtpHeader;
         }
@@ -123,6 +125,9 @@ public class RtpParser {
             Log.d(TAG, header[1] == 0 ? "RTP packet" : "RTCP packet");
 
         int packetSize = RtpHeader.getPacketSize(header);
+        if (packetSize < RTP_HEADER_SIZE) {
+            return null;
+        }
         if (DEBUG)
             Log.d(TAG, "Packet size: " + packetSize);
 
@@ -133,13 +138,57 @@ public class RtpParser {
                 boolean foundHeader = RtpHeader.searchForNextRtpHeader(inputStream, header);
                 if (foundHeader) {
                     packetSize = RtpHeader.getPacketSize(header);
-                    if (NetUtils.readData(inputStream, header, 0, header.length) == header.length)
-                        return RtpHeader.parseData(header, packetSize);
+                    if (packetSize >= RTP_HEADER_SIZE &&
+                            NetUtils.readData(inputStream, header, 0, header.length) == header.length) {
+                        rtpHeader = RtpHeader.parseData(header, packetSize);
+                        return rtpHeader == null ? null : consumeVariableHeader(inputStream, rtpHeader);
+                    }
                 }
             } else {
-                return rtpHeader;
+                return consumeVariableHeader(inputStream, rtpHeader);
             }
         }
         return null;
+    }
+
+    @Nullable
+    private static RtpHeader consumeVariableHeader(@NonNull InputStream inputStream,
+                                                   @NonNull RtpHeader header) throws IOException {
+        int csrcBytes = header.cc * 4;
+        if (!discard(inputStream, csrcBytes)) {
+            return null;
+        }
+        header.payloadSize -= csrcBytes;
+
+        if (header.extension != 0) {
+            byte[] extensionHeader = new byte[4];
+            if (NetUtils.readData(inputStream, extensionHeader, 0, extensionHeader.length) != extensionHeader.length) {
+                return null;
+            }
+            int extensionBytes = (((extensionHeader[2] & 0xFF) << 8) |
+                    (extensionHeader[3] & 0xFF)) * 4;
+            header.payloadSize -= extensionHeader.length + extensionBytes;
+            if (header.payloadSize < 0 || !discard(inputStream, extensionBytes)) {
+                return null;
+            }
+        }
+
+        return header.payloadSize < 0 ? null : header;
+    }
+
+    private static boolean discard(@NonNull InputStream inputStream, int length) throws IOException {
+        if (length <= 0) {
+            return true;
+        }
+        byte[] discardBuffer = new byte[Math.min(length, 1024)];
+        int remaining = length;
+        while (remaining > 0) {
+            int toRead = Math.min(remaining, discardBuffer.length);
+            if (NetUtils.readData(inputStream, discardBuffer, 0, toRead) != toRead) {
+                return false;
+            }
+            remaining -= toRead;
+        }
+        return true;
     }
 }
