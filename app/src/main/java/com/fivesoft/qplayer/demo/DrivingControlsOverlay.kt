@@ -8,12 +8,17 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -37,14 +42,21 @@ internal fun DrivingControlsOverlay(modifier: Modifier = Modifier) {
     BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
         val compact = maxWidth < 480.dp
         val wheelSize = if (compact) 104.dp else 144.dp
-        val pedalWidth = if (compact) 56.dp else 68.dp
-        val pedalHeight = if (compact) 92.dp else 112.dp
+        val brakeWidth = if (compact) 50.dp else 60.dp
+        val brakeHeight = if (compact) 78.dp else 92.dp
+        val gasWidth = if (compact) 62.dp else 74.dp
+        val gasHeight = if (compact) 102.dp else 120.dp
         val edgePadding = if (compact) 16.dp else 32.dp
         val pedalSpacing = if (compact) 10.dp else 16.dp
 
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .windowInsetsPadding(
+                    WindowInsets.safeDrawing.only(
+                        WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom
+                    )
+                )
                 .padding(horizontal = edgePadding, vertical = 16.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.Bottom
@@ -57,15 +69,15 @@ internal fun DrivingControlsOverlay(modifier: Modifier = Modifier) {
             ) {
                 DrivingPedal(
                     label = "HAMULEC",
-                    accent = Color(0xFFFF6B6B),
-                    width = pedalWidth,
-                    height = pedalHeight
+                    accent = Color(0xFFAAAEB4),
+                    width = brakeWidth,
+                    height = brakeHeight
                 )
                 DrivingPedal(
                     label = "GAZ",
-                    accent = Color(0xFF72E59A),
-                    width = pedalWidth,
-                    height = pedalHeight
+                    accent = Color(0xFFD0D2D5),
+                    width = gasWidth,
+                    height = gasHeight
                 )
             }
         }
