@@ -128,4 +128,27 @@ class RtspCompatibilityTest {
         assertEquals(3, header.payloadSize)
         assertEquals(listOf(0x30, 0x31, 0x32), input.readBytes().map { it.toInt() and 0xFF })
     }
+
+    @Test
+    fun rtpParserSkipsRtcpInterleavedChannel() {
+        val rtcpPacket = byteArrayOf(
+            0x24, 0x01, 0x00, 0x1c,
+            0x80.toByte(), 0xc8.toByte(), 0x00, 0x06
+        ) + ByteArray(24)
+        val rtpPacket = byteArrayOf(
+            0x24, 0x00, 0x00, 0x0d,
+            0x80.toByte(), 0x60, 0x00, 0x01,
+            0x00, 0x00, 0x00, 0x02,
+            0x01, 0x02, 0x03, 0x04,
+            0x65
+        )
+        val input = ByteArrayInputStream(rtcpPacket + rtpPacket)
+
+        val header = RtpParser.readHeader(input)
+
+        assertNotNull(header)
+        assertEquals(96, header!!.payloadType)
+        assertEquals(1, header.payloadSize)
+        assertEquals(0x65, input.read())
+    }
 }

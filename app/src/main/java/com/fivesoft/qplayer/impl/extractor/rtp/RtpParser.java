@@ -40,14 +40,15 @@ public class RtpParser {
             boolean foundFirstByte = false;
             boolean foundSecondByte = false;
             byte[] oneByte = new byte[1];
-            // Search for {0x24, 0x00}
+            // Search for '$' followed by a valid interleaved channel number.
             do {
                 Util.checkInterrupted();
 
                 if (bytesRemaining-- < 0)
                     return false;
                 // Read 1 byte
-                NetUtils.readData(inputStream, oneByte, 0, 1);
+                if (NetUtils.readData(inputStream, oneByte, 0, 1) != 1)
+                    return false;
                 if (foundFirstByte) {
                     // Interleaved channels are one byte. A conservative range avoids
                     // mistaking a '$' inside an RTSP text response for a packet marker.
@@ -118,37 +119,58 @@ public class RtpParser {
         // 24 01 00 1c 80 c8 00 06  7f 1d d2 c4
         // 24 01 00 1c 80 c8 00 06  13 9b cf 60
         // 24 02 01 12 80 e1 01 d2  00 07 43 f0
-        byte[] header = new byte[RTP_HEADER_SIZE];
-        // Skip 4 bytes (TCP only). No those bytes in UDP.
-        NetUtils.readData(inputStream, header, 0, 4);
-        if (DEBUG && header[0] == 0x24)
-            Log.d(TAG, header[1] == 0 ? "RTP packet" : "RTCP packet");
+        byte[] interleavedHeader = new byte[4];
+        byte[] rtpHeaderData = new byte[RTP_HEADER_SIZE];
 
-        int packetSize = RtpHeader.getPacketSize(header);
-        if (packetSize < RTP_HEADER_SIZE) {
-            return null;
-        }
-        if (DEBUG)
-            Log.d(TAG, "Packet size: " + packetSize);
+        while (readInterleavedHeader(inputStream, interleavedHeader)) {
+            int packetSize = RtpHeader.getPacketSize(interleavedHeader);
+            int channel = interleavedHeader[1] & 0xFF;
 
-        if (NetUtils.readData(inputStream, header, 0, header.length) == header.length) {
-            RtpHeader rtpHeader = RtpHeader.parseData(header, packetSize);
-            if (rtpHeader == null) {
-                // Header not found. Possible keep-alive response. Search for another RTP header.
-                boolean foundHeader = RtpHeader.searchForNextRtpHeader(inputStream, header);
-                if (foundHeader) {
-                    packetSize = RtpHeader.getPacketSize(header);
-                    if (packetSize >= RTP_HEADER_SIZE &&
-                            NetUtils.readData(inputStream, header, 0, header.length) == header.length) {
-                        rtpHeader = RtpHeader.parseData(header, packetSize);
-                        return rtpHeader == null ? null : consumeVariableHeader(inputStream, rtpHeader);
-                    }
+            // SETUP requests use an RTP/RTCP channel pair. The first channel is RTP and
+            // the following odd channel is RTCP, which must not be exposed as media data.
+            if ((channel & 1) != 0) {
+                if (!discard(inputStream, packetSize)) {
+                    return null;
                 }
-            } else {
-                return consumeVariableHeader(inputStream, rtpHeader);
+                continue;
             }
+
+            if (packetSize < RTP_HEADER_SIZE) {
+                if (!discard(inputStream, packetSize)) {
+                    return null;
+                }
+                continue;
+            }
+            if (DEBUG) {
+                Log.d(TAG, "RTP packet on channel " + channel + ", size: " + packetSize);
+            }
+
+            if (NetUtils.readData(inputStream, rtpHeaderData, 0, rtpHeaderData.length) != rtpHeaderData.length) {
+                return null;
+            }
+
+            RtpHeader rtpHeader = RtpHeader.parseData(rtpHeaderData, packetSize);
+            if (rtpHeader == null) {
+                if (!discard(inputStream, packetSize - RTP_HEADER_SIZE)) {
+                    return null;
+                }
+                continue;
+            }
+
+            return consumeVariableHeader(inputStream, rtpHeader);
         }
         return null;
+    }
+
+    private static boolean readInterleavedHeader(@NonNull InputStream inputStream,
+                                                 @NonNull byte[] header) throws IOException {
+        if (NetUtils.readData(inputStream, header, 0, header.length) != header.length) {
+            return false;
+        }
+        if (header[0] == 0x24 && (header[1] & 0xFF) <= 31) {
+            return true;
+        }
+        return RtpHeader.searchForNextRtpHeader(inputStream, header);
     }
 
     @Nullable
