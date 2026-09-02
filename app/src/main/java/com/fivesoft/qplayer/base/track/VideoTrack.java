@@ -7,9 +7,11 @@ public class VideoTrack extends Track {
     public static final String FIELD_WIDTH = "width";
     public static final String FIELD_HEIGHT = "height";
     public static final String FIELD_FPS = "fps";
+    public static final String FIELD_PIXEL_ASPECT_RATIO = "pixelAspectRatio";
 
     private int width = UNKNOWN, height = UNKNOWN;
     private float fps = UNKNOWN;
+    private float pixelAspectRatio = 1f;
 
     public VideoTrack(@NonNull String id, int payloadType, int width, int height, float fps) {
         super(id, payloadType);
@@ -86,6 +88,38 @@ public class VideoTrack extends Track {
             this.fps = nVal;
             notifyUpdated(FIELD_FPS, nVal);
         }
+    }
+
+    /**
+     * Gets the ratio between the physical width and height of a single pixel.
+     * Square pixels use the default value of {@code 1}.
+     */
+    public float getPixelAspectRatio() {
+        return pixelAspectRatio;
+    }
+
+    /**
+     * Sets the ratio between the physical width and height of a single pixel.
+     * Invalid values fall back to square pixels.
+     */
+    public void setPixelAspectRatio(float pixelAspectRatio) {
+        float newValue = Float.isFinite(pixelAspectRatio) && pixelAspectRatio > 0
+                ? pixelAspectRatio
+                : 1f;
+        if (Float.compare(newValue, this.pixelAspectRatio) != 0) {
+            this.pixelAspectRatio = newValue;
+            notifyUpdated(FIELD_PIXEL_ASPECT_RATIO, newValue);
+        }
+    }
+
+    /**
+     * Gets the display aspect ratio after applying the pixel aspect ratio.
+     */
+    public float getDisplayAspectRatio() {
+        if (width <= 0 || height <= 0) {
+            return UNKNOWN;
+        }
+        return (float) width / height * pixelAspectRatio;
     }
 
 }

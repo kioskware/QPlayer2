@@ -42,8 +42,9 @@ public class QPlayerView extends ViewGroup {
     private final TrackListener trackListener = new TrackListener() {
         @Override
         public void onTrackFieldChanged(@NonNull Track track, @NonNull String field, @Nullable Object value) {
-            if (track instanceof VideoTrack && (VideoTrack.FIELD_WIDTH.equals(field) || VideoTrack.FIELD_HEIGHT.equals(field))) {
-                VideoTrack videoTrack = (VideoTrack) track;
+            if (track instanceof VideoTrack && (VideoTrack.FIELD_WIDTH.equals(field) ||
+                    VideoTrack.FIELD_HEIGHT.equals(field) ||
+                    VideoTrack.FIELD_PIXEL_ASPECT_RATIO.equals(field))) {
                 updatePlayerSize();
             }
         }
@@ -111,7 +112,7 @@ public class QPlayerView extends ViewGroup {
     private KeepScreenOnMode keepScreenOnMode = KeepScreenOnMode.WHEN_STARTED;
 
     private int firstFramesCount = 5;
-    private float aspectRatio = 1;
+    private float aspectRatio = Float.NaN;
 
     public QPlayerView(@NonNull Context context) {
         this(context, null, 0);
@@ -148,12 +149,6 @@ public class QPlayerView extends ViewGroup {
         player.setVideoOutputCreator(videoOutputCreator);
         player.setAudioOutputCreator(DefaultAudioOutputCreator.INSTANCE);
         player.setTrackSelector(new MyTrackSelector(videoEnabled, audioEnabled, subtitlesEnabled));
-
-        post(() -> {
-            if (aspectRatio == 1) {
-                aspectRatio = (float) getWidth() / getHeight();
-            }
-        });
 
     }
 
@@ -373,14 +368,10 @@ public class QPlayerView extends ViewGroup {
             return;
         }
 
-        int videoWidth = videoTrack.getWidth();
-        int videoHeight = videoTrack.getHeight();
-
-        if (videoWidth <= 0 || videoHeight <= 0) {
-            aspectRatio = (float) getWidth() / getHeight();
-        } else {
-            aspectRatio = (float) videoWidth / videoHeight;
-        }
+        float displayAspectRatio = videoTrack.getDisplayAspectRatio();
+        aspectRatio = Float.isFinite(displayAspectRatio) && displayAspectRatio > 0
+                ? displayAspectRatio
+                : Float.NaN;
 
         post(this::requestLayout);
     }
@@ -390,16 +381,19 @@ public class QPlayerView extends ViewGroup {
 
         int widthSize = MeasureSpec.getSize(widthMeasureSpec);
         int heightSize = MeasureSpec.getSize(heightMeasureSpec);
+        float layoutAspectRatio = Float.isFinite(aspectRatio) && aspectRatio > 0
+                ? aspectRatio
+                : heightSize > 0 ? (float) widthSize / heightSize : 1f;
 
         int width;
         int height;
 
-        if (widthSize / aspectRatio < heightSize) {
+        if (widthSize / layoutAspectRatio < heightSize) {
             width = widthSize;
-            height = (int) (widthSize / aspectRatio);
+            height = Math.round(widthSize / layoutAspectRatio);
         } else {
             height = heightSize;
-            width = (int) (heightSize * aspectRatio);
+            width = Math.round(heightSize * layoutAspectRatio);
         }
 
         int childCount = getChildCount();

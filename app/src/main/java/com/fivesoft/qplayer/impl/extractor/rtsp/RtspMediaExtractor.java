@@ -24,6 +24,7 @@ import com.fivesoft.qplayer.common.TrackSelector;
 import com.fivesoft.qplayer.common.Util;
 import com.fivesoft.qplayer.common.X;
 import com.fivesoft.qplayer.common.resolver.Creator;
+import com.fivesoft.qplayer.impl.decoder.video.h264.SPSParser;
 import com.fivesoft.qplayer.impl.extractor.rtp.RtpParser;
 
 import java.io.IOException;
@@ -521,6 +522,10 @@ public class RtspMediaExtractor extends MediaExtractor {
                             );
                         } else if (value.regionMatches(true, 0, "rtpmap:", 0, 7)) {
                             parseRtpMap(value, cb);
+                        } else if (value.regionMatches(true, 0, "framesize:", 0, 10)) {
+                            parseFrameSize(value, cb);
+                        } else if (value.regionMatches(true, 0, "framerate:", 0, 10)) {
+                            parseFrameRate(value, cb);
                         }
                     }
                     break;
@@ -593,6 +598,47 @@ public class RtspMediaExtractor extends MediaExtractor {
         }
     }
 
+    static void parseFrameSize(@NonNull String value, @NonNull Track.Builder target) {
+        if (target.getType() != Track.VIDEO) {
+            return;
+        }
+        String[] fields = value.substring(Math.min(10, value.length())).trim().split("\\s+", 2);
+        if (fields.length < 2) {
+            return;
+        }
+        try {
+            int payloadType = Integer.parseInt(fields[0]);
+            if (target.getPayloadType() >= 0 && payloadType != target.getPayloadType()) {
+                return;
+            }
+            String dimensions = fields[1].trim().split("\\s+", 2)[0];
+            String[] size = dimensions.split("[-xX]", 2);
+            if (size.length != 2) {
+                return;
+            }
+            int width = Integer.parseInt(size[0]);
+            int height = Integer.parseInt(size[1]);
+            if (width > 0 && height > 0) {
+                target.setWidth(width);
+                target.setHeight(height);
+            }
+        } catch (NumberFormatException ignored) {
+        }
+    }
+
+    static void parseFrameRate(@NonNull String value, @NonNull Track.Builder target) {
+        if (target.getType() != Track.VIDEO) {
+            return;
+        }
+        try {
+            float frameRate = Float.parseFloat(value.substring(Math.min(10, value.length())).trim());
+            if (Float.isFinite(frameRate) && frameRate > 0) {
+                target.setFps(frameRate);
+            }
+        } catch (NumberFormatException ignored) {
+        }
+    }
+
     private static void parseRtspParamString(@NonNull String input, @NonNull Track.Builder target) {
         String[] keyValuePairs = input.split(";");
 
@@ -611,6 +657,15 @@ public class RtspMediaExtractor extends MediaExtractor {
                             byte[] pps = Base64.decode(paramsSpsPps[1], Base64.NO_WRAP);
                             target.setCsd(0, sps);
                             target.setCsd(1, pps);
+                            SPSParser.VideoParams videoParams = SPSParser.parseSPSStatic(sps, 0, sps.length);
+                            if (target.getType() == Track.VIDEO) {
+                                target.setWidth(videoParams.width);
+                                target.setHeight(videoParams.height);
+                                target.setPixelAspectRatio(videoParams.getPixelAspectRatio());
+                                if (videoParams.frameRate > 0) {
+                                    target.setFps(videoParams.frameRate);
+                                }
+                            }
                         }
                     } catch (Exception ignored) {
                     }

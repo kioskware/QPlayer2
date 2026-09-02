@@ -489,6 +489,7 @@ public abstract class Track extends ListenerManager<TrackListener> {
         private int channels = Constants.UNKNOWN_VALUE;
 
         private float fps = Constants.UNKNOWN_VALUE;
+        private float pixelAspectRatio = 1f;
 
         private String mode;
 
@@ -570,6 +571,11 @@ public abstract class Track extends ListenerManager<TrackListener> {
             return this;
         }
 
+        public Builder setPixelAspectRatio(float pixelAspectRatio) {
+            this.pixelAspectRatio = pixelAspectRatio;
+            return this;
+        }
+
         public Builder setMode(String mode) {
             this.mode = mode;
             return this;
@@ -597,6 +603,7 @@ public abstract class Track extends ListenerManager<TrackListener> {
                 video.setWidth(width);
                 video.setHeight(height);
                 video.setFps(fps);
+                video.setPixelAspectRatio(pixelAspectRatio);
             } else if(type == AUDIO){
                 AudioTrack audio = new AudioTrack(id, payloadType);
                 res = audio;

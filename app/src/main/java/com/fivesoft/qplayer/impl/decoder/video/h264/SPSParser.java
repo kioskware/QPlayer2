@@ -3,208 +3,325 @@ package com.fivesoft.qplayer.impl.decoder.video.h264;
 import com.fivesoft.qplayer.common.Constants;
 
 import java.util.Arrays;
+import java.util.Objects;
 
 public class SPSParser {
 
-    private int spsParserOffset;
-
-    private int readBits(byte[] buffer, int count) {
-        int result = 0;
-        int index = (spsParserOffset / 8);
-        int bitNumber = (spsParserOffset - (index * 8));
-        int outBitNumber = count - 1;
-        for (int c = 0; c < count; c++) {
-            if ((buffer[index] << bitNumber & 0x80) != 0) {
-                result |= (1 << outBitNumber);
-            }
-            if (++bitNumber > 7) {
-                bitNumber = 0;
-                index++;
-            }
-            outBitNumber--;
-        }
-        spsParserOffset += count;
-        return result;
-    }
-
-    private int readUEG(byte[] buffer) {
-        int bitcount = 0;
-
-        while (true) {
-            if (readBits(buffer, 1) == 0) {
-                bitcount++;
-            } else {
-                break;
-            }
-        }
-
-        int result = 0;
-        if (bitcount > 0) {
-            int val = readBits(buffer, bitcount);
-            result = (1 << bitcount) - 1 + val;
-        }
-
-        return result;
-    }
-
-    private int readEG(byte[] buffer) {
-        int value = readUEG(buffer);
-        if ((value & 0x01) != 0) {
-            return (value + 1) / 2;
-        } else {
-            return -(value / 2);
-        }
-    }
-
-    private void skipScalingList(byte[] buffer, int count) {
-        int deltaScale, lastScale = 8, nextScale = 8;
-        for (int j = 0; j < count; j++) {
-            if (nextScale != 0) {
-                deltaScale = readEG(buffer);
-                nextScale = (lastScale + deltaScale + 256) % 256;
-            }
-            lastScale = (nextScale == 0 ? lastScale : nextScale);
-        }
-    }
+    private static final int[][] ASPECT_RATIOS = {
+            {0, 0}, {1, 1}, {12, 11}, {10, 11}, {16, 11}, {40, 33},
+            {24, 11}, {20, 11}, {32, 11}, {80, 33}, {18, 11}, {15, 11},
+            {64, 33}, {160, 99}, {4, 3}, {3, 2}, {2, 1}
+    };
 
     public VideoParams parseSPS(byte[] src, int off) {
+        Objects.requireNonNull(src, "src");
+        return parseSPS(src, off, src.length - off);
+    }
 
-        src = Arrays.copyOfRange(src, off, src.length);
+    public VideoParams parseSPS(byte[] src, int off, int len) {
+        Objects.requireNonNull(src, "src");
+        if (off < 0 || len <= 0 || off > src.length - len) {
+            throw new IllegalArgumentException("Invalid SPS range");
+        }
 
-        int profileIdc;
-        int pictOrderCntType;
-        int picWidthInMbsMinus1;
-        int picHeightInMapUnitsMinus1;
-        int frameMbsOnlyFlag;
-        int frameCropLeftOffset = 0;
-        int frameCropRightOffset = 0;
-        int frameCropTopOffset = 0;
-        int frameCropBottomOffset = 0;
+        int nalOffset = off + H264Util.startsWithNalPrefix(src, off, len);
+        int end = off + len;
+        if (nalOffset >= end || (src[nalOffset] & 0x1F) != H264Util.NAL_UNIT_TYPE_SPS) {
+            throw new IllegalArgumentException("NAL unit is not an SPS");
+        }
 
-        spsParserOffset = off;
-        readBits(src, 8);
-        profileIdc = readBits(src, 8);
-        readBits(src, 16);
-        readUEG(src);
+        byte[] rbsp = removeEmulationPreventionBytes(src, nalOffset + 1, end - nalOffset - 1);
+        BitReader bits = new BitReader(rbsp);
 
-        if (profileIdc == 100 || profileIdc == 110 || profileIdc == 122 ||
-            profileIdc == 244 || profileIdc == 44 || profileIdc == 83 ||
-            profileIdc == 86 || profileIdc == 118 || profileIdc == 128) {
-            int chromaFormatIdc = readUEG(src);
-            if (chromaFormatIdc == 3) {
-                readBits(src, 1);
+        int profileIdc = bits.readInt(8);
+        bits.skipBits(8); // constraint_set flags and reserved_zero_2bits
+        bits.skipBits(8); // level_idc
+        bits.readUnsignedExpGolomb(); // seq_parameter_set_id
+
+        int chromaFormatIdc = 1;
+        boolean separateColourPlane = false;
+        if (isExtendedProfile(profileIdc)) {
+            chromaFormatIdc = bits.readUnsignedExpGolomb();
+            if (chromaFormatIdc > 3) {
+                throw new IllegalArgumentException("Invalid chroma_format_idc");
             }
-            readUEG(src);
-            readUEG(src);
-            readBits(src, 1);
-            if (readBits(src, 1) != 0) {
-                for (int i = 0; i < (chromaFormatIdc != 3 ? 8 : 12); i++) {
-                    if (readBits(src, 1) != 0) {
-                        if (i < 6) {
-                            skipScalingList(src, 16);
-                        } else {
-                            skipScalingList(src, 64);
-                        }
+            if (chromaFormatIdc == 3) {
+                separateColourPlane = bits.readBit();
+            }
+            bits.readUnsignedExpGolomb(); // bit_depth_luma_minus8
+            bits.readUnsignedExpGolomb(); // bit_depth_chroma_minus8
+            bits.skipBits(1); // qpprime_y_zero_transform_bypass_flag
+            if (bits.readBit()) { // seq_scaling_matrix_present_flag
+                int scalingListCount = chromaFormatIdc == 3 ? 12 : 8;
+                for (int i = 0; i < scalingListCount; i++) {
+                    if (bits.readBit()) {
+                        skipScalingList(bits, i < 6 ? 16 : 64);
                     }
                 }
             }
         }
 
-        readUEG(src);
-        pictOrderCntType = readUEG(src);
+        bits.readUnsignedExpGolomb(); // log2_max_frame_num_minus4
+        int picOrderCntType = bits.readUnsignedExpGolomb();
+        if (picOrderCntType == 0) {
+            bits.readUnsignedExpGolomb(); // log2_max_pic_order_cnt_lsb_minus4
+        } else if (picOrderCntType == 1) {
+            bits.skipBits(1); // delta_pic_order_always_zero_flag
+            bits.readSignedExpGolomb(); // offset_for_non_ref_pic
+            bits.readSignedExpGolomb(); // offset_for_top_to_bottom_field
+            int cycleLength = bits.readUnsignedExpGolomb();
+            for (int i = 0; i < cycleLength; i++) {
+                bits.readSignedExpGolomb();
+            }
+        } else if (picOrderCntType > 2) {
+            throw new IllegalArgumentException("Invalid pic_order_cnt_type");
+        }
 
-        if (pictOrderCntType == 0) {
-            readUEG(src);
-        } else if (pictOrderCntType == 1) {
-            readBits(src, 1);
-            readEG(src);
-            readEG(src);
-            for (int i = 0; i < readUEG(src); i++) {
-                readEG(src);
+        bits.readUnsignedExpGolomb(); // max_num_ref_frames
+        bits.skipBits(1); // gaps_in_frame_num_value_allowed_flag
+        int picWidthInMbsMinus1 = bits.readUnsignedExpGolomb();
+        int picHeightInMapUnitsMinus1 = bits.readUnsignedExpGolomb();
+        boolean frameMbsOnly = bits.readBit();
+        if (!frameMbsOnly) {
+            bits.skipBits(1); // mb_adaptive_frame_field_flag
+        }
+        bits.skipBits(1); // direct_8x8_inference_flag
+
+        int cropLeft = 0;
+        int cropRight = 0;
+        int cropTop = 0;
+        int cropBottom = 0;
+        if (bits.readBit()) { // frame_cropping_flag
+            cropLeft = bits.readUnsignedExpGolomb();
+            cropRight = bits.readUnsignedExpGolomb();
+            cropTop = bits.readUnsignedExpGolomb();
+            cropBottom = bits.readUnsignedExpGolomb();
+        }
+
+        int sarWidth = 1;
+        int sarHeight = 1;
+        float frameRate = Constants.UNKNOWN_VALUE;
+        if (bits.bitsLeft() > 0 && bits.readBit()) { // vui_parameters_present_flag
+            try {
+                VuiParams vui = parseVui(bits);
+                sarWidth = vui.sarWidth;
+                sarHeight = vui.sarHeight;
+                frameRate = vui.frameRate;
+            } catch (IllegalArgumentException ignored) {
+                // Dimensions are still useful when a camera sends truncated optional VUI data.
             }
         }
 
-        readUEG(src);
-        readBits(src, 1);
-        picWidthInMbsMinus1 = readUEG(src);
-        picHeightInMapUnitsMinus1 = readUEG(src);
-        frameMbsOnlyFlag = readBits(src, 1);
-        if (frameMbsOnlyFlag == 0) {
-            readBits(src, 1);
-        }
-        readBits(src, 1);
-        if (readBits(src, 1) != 0) {
-            frameCropLeftOffset = readUEG(src);
-            frameCropRightOffset = readUEG(src);
-            frameCropTopOffset = readUEG(src);
-            frameCropBottomOffset = readUEG(src);
+        int chromaArrayType = separateColourPlane ? 0 : chromaFormatIdc;
+        int subWidthC = chromaArrayType == 1 || chromaArrayType == 2 ? 2 : 1;
+        int subHeightC = chromaArrayType == 1 ? 2 : 1;
+        int cropUnitX = chromaArrayType == 0 ? 1 : subWidthC;
+        int cropUnitY = (chromaArrayType == 0 ? 1 : subHeightC) * (frameMbsOnly ? 1 : 2);
+
+        long width = (long) (picWidthInMbsMinus1 + 1) * 16
+                - (long) (cropLeft + cropRight) * cropUnitX;
+        long height = (long) (picHeightInMapUnitsMinus1 + 1) * 16 * (frameMbsOnly ? 1 : 2)
+                - (long) (cropTop + cropBottom) * cropUnitY;
+        if (width <= 0 || height <= 0 || width > Integer.MAX_VALUE || height > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("Invalid SPS dimensions");
         }
 
-        boolean vuiParametersPresentFlag = readBits(src, 1) == 1;
-        int frameRate = 0;
-
-        if (vuiParametersPresentFlag) {
-            boolean aspectRatioInfoPresentFlag = readBits(src, 1) == 1;
-            if (aspectRatioInfoPresentFlag) {
-                int aspectRatioIdc = readBits(src, 8);
-                if (aspectRatioIdc == 255) {
-                    readBits(src, 16); // sar_width
-                    readBits(src, 16); // sar_height
-                }
-            }
-
-            boolean overscanInfoPresentFlag = readBits(src, 1) == 1;
-            if (overscanInfoPresentFlag) {
-                readBits(src, 1); // overscan_appropriate_flag
-            }
-
-            boolean videoSignalTypePresentFlag = readBits(src, 1) == 1;
-            if (videoSignalTypePresentFlag) {
-                readBits(src, 3); // video_format
-                readBits(src, 1); // video_full_range_flag
-                boolean colourDescriptionPresentFlag = readBits(src, 1) == 1;
-                if (colourDescriptionPresentFlag) {
-                    readBits(src, 8); // colour_primaries
-                    readBits(src, 8); // transfer_characteristics
-                    readBits(src, 8); // matrix_coefficients
-                }
-            }
-
-            boolean chromaLocInfoPresentFlag = readBits(src, 1) == 1;
-            if (chromaLocInfoPresentFlag) {
-                readUEG(src); // chroma_sample_loc_type_top_field
-                readUEG(src); // chroma_sample_loc_type_bottom_field
-            }
-
-            boolean timingInfoPresentFlag = readBits(src, 1) == 1;
-            if (timingInfoPresentFlag) {
-                int numUnitsInTick = readBits(src, 32); // num_units_in_tick
-                int timeScale = readBits(src, 32); // time_scale
-                boolean fixedFrameRateFlag = readBits(src, 1) == 1;
-                if (fixedFrameRateFlag) {
-                    frameRate = (int) Math.ceil((float) timeScale / numUnitsInTick) / 2;
-                }
-            }
-        }
-        int width = ((picWidthInMbsMinus1 + 1) * 16) - frameCropLeftOffset * 2 - frameCropRightOffset * 2;
-        int height = (2 - frameMbsOnlyFlag) * (picHeightInMapUnitsMinus1 + 1) * 16 - ((frameMbsOnlyFlag != 0 ? 2 : 4) * (frameCropTopOffset + frameCropBottomOffset));
-
-        return new VideoParams(width, height, frameRate);
+        return new VideoParams((int) width, (int) height, frameRate, sarWidth, sarHeight);
     }
 
     public static VideoParams parseSPSStatic(byte[] src, int off) {
         return new SPSParser().parseSPS(src, off);
     }
 
+    public static VideoParams parseSPSStatic(byte[] src, int off, int len) {
+        return new SPSParser().parseSPS(src, off, len);
+    }
+
+    private static boolean isExtendedProfile(int profileIdc) {
+        switch (profileIdc) {
+            case 44:
+            case 83:
+            case 86:
+            case 100:
+            case 110:
+            case 118:
+            case 122:
+            case 128:
+            case 134:
+            case 135:
+            case 138:
+            case 139:
+            case 244:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private static void skipScalingList(BitReader bits, int size) {
+        int lastScale = 8;
+        int nextScale = 8;
+        for (int i = 0; i < size; i++) {
+            if (nextScale != 0) {
+                nextScale = (lastScale + bits.readSignedExpGolomb() + 256) % 256;
+            }
+            if (nextScale != 0) {
+                lastScale = nextScale;
+            }
+        }
+    }
+
+    private static VuiParams parseVui(BitReader bits) {
+        int sarWidth = 1;
+        int sarHeight = 1;
+        if (bits.readBit()) { // aspect_ratio_info_present_flag
+            int aspectRatioIdc = bits.readInt(8);
+            if (aspectRatioIdc == 255) {
+                int extendedSarWidth = bits.readInt(16);
+                int extendedSarHeight = bits.readInt(16);
+                if (extendedSarWidth > 0 && extendedSarHeight > 0) {
+                    sarWidth = extendedSarWidth;
+                    sarHeight = extendedSarHeight;
+                }
+            } else if (aspectRatioIdc > 0 && aspectRatioIdc < ASPECT_RATIOS.length) {
+                sarWidth = ASPECT_RATIOS[aspectRatioIdc][0];
+                sarHeight = ASPECT_RATIOS[aspectRatioIdc][1];
+            }
+        }
+        if (bits.readBit()) { // overscan_info_present_flag
+            bits.skipBits(1);
+        }
+        if (bits.readBit()) { // video_signal_type_present_flag
+            bits.skipBits(4);
+            if (bits.readBit()) { // colour_description_present_flag
+                bits.skipBits(24);
+            }
+        }
+        if (bits.readBit()) { // chroma_loc_info_present_flag
+            bits.readUnsignedExpGolomb();
+            bits.readUnsignedExpGolomb();
+        }
+
+        float frameRate = Constants.UNKNOWN_VALUE;
+        if (bits.readBit()) { // timing_info_present_flag
+            long numUnitsInTick = bits.readBits(32);
+            long timeScale = bits.readBits(32);
+            boolean fixedFrameRate = bits.readBit();
+            if (fixedFrameRate && numUnitsInTick > 0 && timeScale > 0) {
+                frameRate = (float) (timeScale / (2.0 * numUnitsInTick));
+            }
+        }
+        return new VuiParams(sarWidth, sarHeight, frameRate);
+    }
+
+    private static byte[] removeEmulationPreventionBytes(byte[] src, int off, int len) {
+        byte[] result = new byte[len];
+        int output = 0;
+        int zeroCount = 0;
+        for (int i = off; i < off + len; i++) {
+            int value = src[i] & 0xFF;
+            if (zeroCount == 2 && value == 3) {
+                zeroCount = 0;
+                continue;
+            }
+            result[output++] = src[i];
+            zeroCount = value == 0 ? zeroCount + 1 : 0;
+        }
+        return Arrays.copyOf(result, output);
+    }
+
+    private static final class VuiParams {
+        final int sarWidth;
+        final int sarHeight;
+        final float frameRate;
+
+        VuiParams(int sarWidth, int sarHeight, float frameRate) {
+            this.sarWidth = sarWidth;
+            this.sarHeight = sarHeight;
+            this.frameRate = frameRate;
+        }
+    }
+
+    private static final class BitReader {
+        private final byte[] data;
+        private int bitOffset;
+
+        BitReader(byte[] data) {
+            this.data = data;
+        }
+
+        boolean readBit() {
+            return readBits(1) != 0;
+        }
+
+        int readInt(int count) {
+            return (int) readBits(count);
+        }
+
+        long readBits(int count) {
+            if (count < 0 || count > 32 || count > bitsLeft()) {
+                throw new IllegalArgumentException("Unexpected end of SPS");
+            }
+            long result = 0;
+            for (int i = 0; i < count; i++) {
+                int byteIndex = bitOffset >> 3;
+                int bitIndex = 7 - (bitOffset & 7);
+                result = (result << 1) | ((data[byteIndex] >> bitIndex) & 1);
+                bitOffset++;
+            }
+            return result;
+        }
+
+        void skipBits(int count) {
+            readBits(count);
+        }
+
+        int readUnsignedExpGolomb() {
+            int leadingZeros = 0;
+            while (!readBit()) {
+                if (++leadingZeros > 31) {
+                    throw new IllegalArgumentException("Invalid Exp-Golomb value");
+                }
+            }
+            long suffix = leadingZeros == 0 ? 0 : readBits(leadingZeros);
+            long value = (1L << leadingZeros) - 1 + suffix;
+            if (value > Integer.MAX_VALUE) {
+                throw new IllegalArgumentException("Exp-Golomb value is too large");
+            }
+            return (int) value;
+        }
+
+        int readSignedExpGolomb() {
+            int value = readUnsignedExpGolomb();
+            return (value & 1) == 0 ? -(value / 2) : (value + 1) / 2;
+        }
+
+        int bitsLeft() {
+            return data.length * 8 - bitOffset;
+        }
+    }
+
     public static class VideoParams {
         public final int width;
         public final int height;
-        public final int frameRate;
+        public final float frameRate;
+        public final int sarWidth;
+        public final int sarHeight;
 
-        public VideoParams(int width, int height, int frameRate) {
+        public VideoParams(int width, int height, float frameRate) {
+            this(width, height, frameRate, 1, 1);
+        }
+
+        public VideoParams(int width, int height, float frameRate, int sarWidth, int sarHeight) {
             this.width = Math.max(Constants.UNKNOWN_VALUE, width);
             this.height = Math.max(Constants.UNKNOWN_VALUE, height);
             this.frameRate = Math.max(Constants.UNKNOWN_VALUE, frameRate);
+            this.sarWidth = sarWidth > 0 ? sarWidth : 1;
+            this.sarHeight = sarHeight > 0 ? sarHeight : 1;
+        }
+
+        public float getPixelAspectRatio() {
+            return (float) sarWidth / sarHeight;
         }
 
         @Override
@@ -213,8 +330,9 @@ public class SPSParser {
                     "width=" + width +
                     ", height=" + height +
                     ", frameRate=" + frameRate +
+                    ", sarWidth=" + sarWidth +
+                    ", sarHeight=" + sarHeight +
                     '}';
         }
     }
-
 }

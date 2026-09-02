@@ -64,27 +64,20 @@ public class H264Util {
     public static final int NAL_UNIT_TYPE_FU_B = 29;
 
     public static byte getNalUnitType(byte[] nal, int off, int len) {
-        // Ensure there is enough data to determine NAL unit type
-        if (len < 1) {
-            throw new IllegalArgumentException("Invalid NAL unit length");
+        Objects.requireNonNull(nal, "nal");
+        if (off < 0 || len < 1 || off > nal.length - len) {
+            throw new IllegalArgumentException("Invalid NAL unit range");
         }
 
-        int prefixLength = 0;
-        // Check for 3-byte start code prefix (0x000001)
-        if (len >= 3 && nal[off] == 0x00 && nal[off + 1] == 0x00 && nal[off + 2] == 0x01) {
-            prefixLength = 3;
-        }
-        // Check for 4-byte start code prefix (0x00000001)
-        else if (len >= 4 && nal[off] == 0x00 && nal[off + 1] == 0x00 && nal[off + 2] == 0x00 && nal[off + 3] == 0x01) {
-            prefixLength = 4;
+        int prefixLength = startsWithNalPrefix(nal, off, len);
+        if (prefixLength >= len) {
+            throw new IllegalArgumentException("NAL unit contains only a prefix");
         }
 
         if (prefixLength == 0) {
-            // No prefix found, assuming the entire nal array is the NAL unit
-            return (byte) (nal[off] & 0x1F); // Extract NAL unit type from the first 5 bits
+            return (byte) (nal[off] & 0x1F);
         } else {
-            // Prefix found, extract NAL unit type after the prefix
-            return (byte) (nal[off + prefixLength] & 0x1F); // Extract NAL unit type from the first 5 bits
+            return (byte) (nal[off + prefixLength] & 0x1F);
         }
     }
 
@@ -114,27 +107,27 @@ public class H264Util {
     public static int startsWithNalPrefix(byte[] data, int off, int len) {
         Objects.requireNonNull(data);
 
-        if(len < Constants.H264_NAL_PREFIX_OLD.length)
+        if (off < 0 || len < 0 || off > data.length - len ||
+                len < Constants.H264_NAL_PREFIX_OLD.length)
             return 0;
 
-        if(data[0] == 0 && data[1] == 0 && data[2] == 1)
+        if(data[off] == 0 && data[off + 1] == 0 && data[off + 2] == 1)
             return Constants.H264_NAL_PREFIX_OLD.length;
 
         if(len < Constants.H264_NAL_PREFIX.length)
             return 0;
 
-        if(data[0] == 0 && data[1] == 0 && data[2] == 0 && data[3] == 1)
+        if(data[off] == 0 && data[off + 1] == 0 && data[off + 2] == 0 && data[off + 3] == 1)
             return Constants.H264_NAL_PREFIX.length;
 
         return 0;
     }
 
     public static byte[] ensureStartsWithNalPrefix(byte[] src) {
-        if (src == null || src.length < 4)
+        if (src == null)
             return null;
 
-        if ((src[0] == 0 && src[1] == 0 && src[2] == 0 && src[3] == 1) ||
-                (src[0] == 0 && src[1] == 0 && src[2] == 1)) { // 0x00 0x00 0x00 0x01 or 0x00 0x00 0x01
+        if (startsWithNalPrefix(src, 0, src.length) != 0) {
             return src;
         }
 

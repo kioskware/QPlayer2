@@ -19,8 +19,6 @@ import com.fivesoft.qplayer.base.UnsupportedSampleException;
 import com.fivesoft.qplayer.base.components.MediaDecoderOutput;
 import com.fivesoft.qplayer.base.track.VideoTrack;
 import com.fivesoft.qplayer.common.Constants;
-import com.fivesoft.qplayer.common.Size;
-import com.fivesoft.qplayer.common.Util;
 import com.fivesoft.qplayer.common.resolver.Creator;
 import com.fivesoft.qplayer.core.FrameBuilder;
 import com.fivesoft.qplayer.core.decoders.VideoDecoder;
@@ -88,6 +86,13 @@ public class H264Decoder extends VideoDecoder {
     public static final int MAX_VIDEO_WIDTH = 4096; // 4K
     public static final int MAX_VIDEO_HEIGHT = 2304; // 4K
 
+    private static final int DEFAULT_VIDEO_WIDTH = 640;
+    private static final int DEFAULT_VIDEO_HEIGHT = 360;
+    private static final int MAX_REASONABLE_VIDEO_DIMENSION = 32768;
+    private static final float MAX_REASONABLE_FRAME_RATE = 1000f;
+    private static final String KEY_SAR_WIDTH = "sar-width";
+    private static final String KEY_SAR_HEIGHT = "sar-height";
+
     private static final long DEQUEUE_INPUT_TIMEOUT_US = TimeUnit.MILLISECONDS.toMicros(0);
     private static final long DEQUEUE_OUTPUT_BUFFER_TIMEOUT_US = TimeUnit.MILLISECONDS.toMicros(0);
 
@@ -136,9 +141,12 @@ public class H264Decoder extends VideoDecoder {
      * @param track The track that the decoder decodes. Cannot be null.
      * @throws UnsupportedSampleFormatException If the specified sample format is not supported.
      */
-
     public H264Decoder(@NonNull VideoTrack track, int sampleFormat, int maxEncodedFrameSize) throws UnsupportedSampleFormatException {
         super(track, sampleFormat, maxEncodedFrameSize);
+        if (track.getWidth() > 0 && track.getHeight() > 0) {
+            videoWidth = track.getWidth();
+            videoHeight = track.getHeight();
+        }
         if (sampleFormat == FORMAT_RAW) {
             frameBuilder = FrameBuilder.RAW_FRAME_BUILDER;
         } else if (sampleFormat == FORMAT_RTP) {
@@ -146,6 +154,7 @@ public class H264Decoder extends VideoDecoder {
         } else {
             throw new UnsupportedSampleFormatException("Unsupported sample format: " + sampleFormat);
         }
+        setCsd(track.getCsd());
     }
 
     @Override
@@ -170,15 +179,14 @@ public class H264Decoder extends VideoDecoder {
      * @param sampleFormat The sample format.
      * @throws UnsupportedSampleFormatException If the specified sample format is not supported.
      */
-
     public H264Decoder(@NonNull VideoTrack track, int sampleFormat) throws UnsupportedSampleFormatException {
         this(track, sampleFormat, FrameBuilder.DEFAULT_MAX_FRAME_SIZE);
-        setCsd(track.getCsd());
     }
 
     @Override
     public void setCsd(@Nullable Csd csd) throws IllegalStateException {
         this.csd = csd;
+        updateVideoParamsFromCsd(csd);
     }
 
     @Override
@@ -216,11 +224,6 @@ public class H264Decoder extends VideoDecoder {
         checkReleased();
 
         try {
-            //Ensure that output surface matches set output surface
-            updateCodecSurface();
-            //Ensure that codec is configured
-            MediaCodec codec = ensureMediaCodec();
-
             if (frame.frameType == Frame.CONFIG_FRAME) {
                 byte nalUnitType = H264Util.getNalUnitType(frame.getArray(), frame.getOffset(), frame.getLength());
                 if (nalUnitType == H264Util.NAL_UNIT_TYPE_SPS) {
@@ -229,17 +232,27 @@ public class H264Decoder extends VideoDecoder {
                 } else if (nalUnitType == H264Util.NAL_UNIT_TYPE_PPS) {
                     ppsReceived = true;
                 }
-            } else if (!spsReceived || !ppsReceived) {
-                //Codec not configured yet
-                waitForKeyFrame = true;
-                return ACTION_WAITING_FOR_CONFIG;
-            } else if(waitForKeyFrame){
-                if(frame.frameType == Frame.SYNC_FRAME){
-                    Log.println(Log.ASSERT, "sdfsdf", "Received key frame, flushing codec");
-                    flush();
-                    waitForKeyFrame = false;
-                } else {
-                    return ACTION_WAITING_FOR_KEY_FRAME;
+            }
+
+            //Ensure that output surface matches set output surface
+            updateCodecSurface();
+            //Ensure that codec is configured
+            MediaCodec codec = ensureMediaCodec();
+
+            if (frame.frameType != Frame.CONFIG_FRAME) {
+                if (!spsReceived || !ppsReceived) {
+                    //Codec not configured yet
+                    waitForKeyFrame = true;
+                    return ACTION_WAITING_FOR_CONFIG;
+                }
+                if (waitForKeyFrame) {
+                    if (frame.frameType == Frame.SYNC_FRAME) {
+                        Log.println(Log.ASSERT, "sdfsdf", "Received key frame, flushing codec");
+                        flush();
+                        waitForKeyFrame = false;
+                    } else {
+                        return ACTION_WAITING_FOR_KEY_FRAME;
+                    }
                 }
             }
 
@@ -252,14 +265,19 @@ public class H264Decoder extends VideoDecoder {
                     bb.rewind();
 
                     //Write nal prefix if needed
-                    if (H264Util.startsWithNalPrefix(frame.getArray(), frame.getOffset(), frame.getLength()) == 0) {
+                    boolean prependNalPrefix = H264Util.startsWithNalPrefix(
+                            frame.getArray(), frame.getOffset(), frame.getLength()
+                    ) == 0;
+                    if (prependNalPrefix) {
                         bb.put(Constants.H264_NAL_PREFIX);
                     }
 
                     //Write all buffered samples
                     bb.put(frame.getArray(), frame.getOffset(), frame.getLength());
 
-                    codec.queueInputBuffer(inIndex, 0, frame.getLength(), frame.getTimestamp(), 0);
+                    int inputSize = frame.getLength() +
+                            (prependNalPrefix ? Constants.H264_NAL_PREFIX.length : 0);
+                    codec.queueInputBuffer(inIndex, 0, inputSize, frame.getTimestamp(), 0);
                 } else {
                     //TODO Is it ok?
                     return ACTION_DROP_FRAME;
@@ -277,8 +295,10 @@ public class H264Decoder extends VideoDecoder {
                     return ACTION_DROP_FRAME;
                 }
                 case MediaCodec.INFO_OUTPUT_FORMAT_CHANGED:
+                    updateVideoParamsFromOutputFormat(codec.getOutputFormat());
+                    return ACTION_CONFIGURED;
                 case MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED:
-                    break;
+                    return ACTION_CONFIGURED;
             }
 
             if ((bufferInfo.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) == 0) {
@@ -391,8 +411,12 @@ public class H264Decoder extends VideoDecoder {
             Bundle params = new Bundle();
             codec = MediaCodec.createDecoderByType(MIME);
 
-            Size safeSize = getDecoderSafeWidthHeight(codec);
-            format = MediaFormat.createVideoFormat(MIME, safeSize.width, safeSize.height);
+            int[] safeSize = getDecoderSafeWidthHeight(codec);
+            format = MediaFormat.createVideoFormat(
+                    MIME,
+                    safeSize[0],
+                    safeSize[1]
+            );
             //format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible);
             bufferInfo = new MediaCodec.BufferInfo();
             frameIndex = 0;
@@ -434,13 +458,17 @@ public class H264Decoder extends VideoDecoder {
         if (csd != null) {
             for (int i = 0; i < csd.getCapacity(); i++) {
                 if (csd.hasCsd(i)) {
-                    format.setByteBuffer("csd-" + i, ByteBuffer.wrap(H264Util.ensureStartsWithNalPrefix(csd.getCsd(i))));
-                    if (i == 0) {
-                        ppsReceived = true;
-                    } else if(i == 1) {
-                        byte[] csd0 = csd.getCsd(i);
-                        obtainVideoParamsFromSPS(csd0, 0, csd0.length);
-                        spsReceived = true;
+                    byte[] data = csd.getCsd(i);
+                    format.setByteBuffer("csd-" + i, ByteBuffer.wrap(H264Util.ensureStartsWithNalPrefix(data)));
+                    try {
+                        byte nalUnitType = H264Util.getNalUnitType(data, 0, data.length);
+                        if (nalUnitType == H264Util.NAL_UNIT_TYPE_SPS) {
+                            obtainVideoParamsFromSPS(data, 0, data.length);
+                            spsReceived = true;
+                        } else if (nalUnitType == H264Util.NAL_UNIT_TYPE_PPS) {
+                            ppsReceived = true;
+                        }
+                    } catch (IllegalArgumentException ignored) {
                     }
                 }
             }
@@ -480,26 +508,42 @@ public class H264Decoder extends VideoDecoder {
         }
     }
 
-    private Size getDecoderSafeWidthHeight(MediaCodec decoder) {
+    private int[] getDecoderSafeWidthHeight(MediaCodec decoder) {
 
         MediaCodecInfo.VideoCapabilities c =
                 decoder.getCodecInfo()
                         .getCapabilitiesForType(MIME)
                         .getVideoCapabilities();
 
-        int width = Util.limit(videoWidth, MIN_VIDEO_WIDTH, MAX_VIDEO_WIDTH);
-        int height = Util.limit(videoHeight, MIN_VIDEO_HEIGHT, MAX_VIDEO_HEIGHT);
+        int width = videoWidth > 0 ? videoWidth : track.getWidth();
+        int height = videoHeight > 0 ? videoHeight : track.getHeight();
+        if (width <= 0 || height <= 0) {
+            width = DEFAULT_VIDEO_WIDTH;
+            height = DEFAULT_VIDEO_HEIGHT;
+        }
 
-        Size size;
+        int widthAlignment = c.getWidthAlignment();
+        int heightAlignment = c.getHeightAlignment();
+        width = ceilDivide(width, widthAlignment) * widthAlignment;
+        height = ceilDivide(height, heightAlignment) * heightAlignment;
+
+        int[] size;
         if (c.isSizeSupported(width, height)) {
-            size = new Size(width, height);
+            size = new int[]{width, height};
         } else {
-            int wa = c.getWidthAlignment();
-            int ha = c.getHeightAlignment();
-            size = new Size(
-                    ceilDivide(width, wa) * wa,
-                    ceilDivide(height, ha) * ha
+            width = alignToRange(
+                    width,
+                    c.getSupportedWidths().getLower(),
+                    c.getSupportedWidths().getUpper(),
+                    widthAlignment
             );
+            height = alignToRange(
+                    height,
+                    c.getSupportedHeights().getLower(),
+                    c.getSupportedHeights().getUpper(),
+                    heightAlignment
+            );
+            size = new int[]{width, height};
         }
 
         return size;
@@ -516,41 +560,30 @@ public class H264Decoder extends VideoDecoder {
         return (numerator + denominator - 1) / denominator;
     }
 
+    private static int alignToRange(int value, int min, int max, int alignment) {
+        int clamped = Math.max(min, Math.min(max, value));
+        int aligned = ceilDivide(clamped, alignment) * alignment;
+        if (aligned > max) {
+            aligned = (max / alignment) * alignment;
+        }
+        return Math.max(min, aligned);
+    }
+
     private void obtainVideoParamsFromSPS(byte[] sps, int off, int len){
         if (sps == null || len < 4) {
             return;
         }
 
         try {
-            //Wrong width and height is returned in High profile
             SPSParser.VideoParams videoParams =
-                    SPSParser.parseSPSStatic(sps, H264Util.startsWithNalPrefix(sps, off, len));
+                    SPSParser.parseSPSStatic(sps, off, len);
 
             if (videoParams != null) {
-                if (videoParams.width > 0 && videoParams.height > 0
-                    && videoParams.width != videoWidth && videoParams.height != videoHeight) {
+                updateVideoDimensions(videoParams.width, videoParams.height);
+                track.setPixelAspectRatio(videoParams.getPixelAspectRatio());
 
-                    if(videoParams.width > MAX_VIDEO_WIDTH || videoParams.height > MAX_VIDEO_HEIGHT
-                            || videoParams.width < MIN_VIDEO_WIDTH || videoParams.height < MIN_VIDEO_HEIGHT){
-                        //Invalid width or height
-                        videoWidth = Constants.UNKNOWN_VALUE;
-                        videoHeight = Constants.UNKNOWN_VALUE;
-                    } else {
-                        videoWidth = videoParams.width;
-                        videoHeight = videoParams.height;
-
-                        MediaFormat format = this.format;
-                        if(format != null){
-                            format.setInteger(MediaFormat.KEY_WIDTH, videoWidth);
-                            format.setInteger(MediaFormat.KEY_HEIGHT, videoHeight);
-                        }
-                    }
-
-                    track.setWidth(videoWidth);
-                    track.setHeight(videoHeight);
-                }
-
-                if(videoParams.frameRate > 0 && videoParams.frameRate != videoFrameRate && videoParams.frameRate <= 130){
+                if(videoParams.frameRate > 0 && videoParams.frameRate != videoFrameRate &&
+                        videoParams.frameRate <= MAX_REASONABLE_FRAME_RATE){
                     videoFrameRate = videoParams.frameRate;
                     track.setFps(videoFrameRate);
                 }
@@ -562,6 +595,77 @@ public class H264Decoder extends VideoDecoder {
             //Log.println(Log.ASSERT, "H264Decoder", "obtainVideoParamsFromPPS: " + e);
         }
 
+    }
+
+    private void updateVideoParamsFromCsd(@Nullable Csd csd) {
+        if (csd == null) {
+            return;
+        }
+        for (int i = 0; i < csd.getCapacity(); i++) {
+            if (!csd.hasCsd(i)) {
+                continue;
+            }
+            byte[] data = csd.getCsd(i);
+            try {
+                byte nalUnitType = H264Util.getNalUnitType(data, 0, data.length);
+                if (nalUnitType == H264Util.NAL_UNIT_TYPE_SPS) {
+                    spsReceived = true;
+                    obtainVideoParamsFromSPS(data, 0, data.length);
+                } else if (nalUnitType == H264Util.NAL_UNIT_TYPE_PPS) {
+                    ppsReceived = true;
+                }
+            } catch (IllegalArgumentException ignored) {
+            }
+        }
+    }
+
+    private void updateVideoParamsFromOutputFormat(@NonNull MediaFormat outputFormat) {
+        try {
+            int width = outputFormat.getInteger(MediaFormat.KEY_WIDTH);
+            int height = outputFormat.getInteger(MediaFormat.KEY_HEIGHT);
+
+            if (outputFormat.containsKey(MediaFormat.KEY_CROP_LEFT) &&
+                    outputFormat.containsKey(MediaFormat.KEY_CROP_RIGHT)) {
+                width = outputFormat.getInteger(MediaFormat.KEY_CROP_RIGHT) + 1
+                        - outputFormat.getInteger(MediaFormat.KEY_CROP_LEFT);
+            }
+            if (outputFormat.containsKey(MediaFormat.KEY_CROP_TOP) &&
+                    outputFormat.containsKey(MediaFormat.KEY_CROP_BOTTOM)) {
+                height = outputFormat.getInteger(MediaFormat.KEY_CROP_BOTTOM) + 1
+                        - outputFormat.getInteger(MediaFormat.KEY_CROP_TOP);
+            }
+            updateVideoDimensions(width, height);
+
+            if (outputFormat.containsKey(KEY_SAR_WIDTH) && outputFormat.containsKey(KEY_SAR_HEIGHT)) {
+                int sarWidth = outputFormat.getInteger(KEY_SAR_WIDTH);
+                int sarHeight = outputFormat.getInteger(KEY_SAR_HEIGHT);
+                if (sarWidth > 0 && sarHeight > 0) {
+                    track.setPixelAspectRatio((float) sarWidth / sarHeight);
+                }
+            }
+        } catch (RuntimeException ignored) {
+            // Some vendor codecs expose an incomplete output format. SPS/SDP remains the fallback.
+        }
+    }
+
+    private void updateVideoDimensions(int width, int height) {
+        if (width <= 0 || height <= 0 ||
+                width > MAX_REASONABLE_VIDEO_DIMENSION || height > MAX_REASONABLE_VIDEO_DIMENSION) {
+            return;
+        }
+        if (width == videoWidth && height == videoHeight) {
+            return;
+        }
+
+        videoWidth = width;
+        videoHeight = height;
+        MediaFormat currentFormat = format;
+        if (currentFormat != null) {
+            currentFormat.setInteger(MediaFormat.KEY_WIDTH, width);
+            currentFormat.setInteger(MediaFormat.KEY_HEIGHT, height);
+        }
+        track.setWidth(width);
+        track.setHeight(height);
     }
 
 }

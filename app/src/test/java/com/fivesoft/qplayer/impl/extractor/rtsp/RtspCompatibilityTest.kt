@@ -1,6 +1,8 @@
 package com.fivesoft.qplayer.impl.extractor.rtsp
 
 import com.fivesoft.qplayer.common.Headers
+import com.fivesoft.qplayer.base.track.Track
+import com.fivesoft.qplayer.base.track.VideoTrack
 import com.fivesoft.qplayer.impl.extractor.rtp.RtpParser
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -150,5 +152,20 @@ class RtspCompatibilityTest {
         assertEquals(96, header!!.payloadType)
         assertEquals(1, header.payloadSize)
         assertEquals(0x65, input.read())
+    }
+
+    @Test
+    fun videoDimensionsAndFrameRateAreReadFromSdpAttributes() {
+        val builder = Track.Builder(Track.VIDEO)
+            .setId("trackID=1")
+            .setPayloadType(96)
+
+        RtspMediaExtractor.parseFrameSize("framesize:96 1920-1080", builder)
+        RtspMediaExtractor.parseFrameRate("framerate:29.97", builder)
+        val track = builder.build() as VideoTrack
+
+        assertEquals(1920, track.width)
+        assertEquals(1080, track.height)
+        assertEquals(29.97f, track.fps)
     }
 }
