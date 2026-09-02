@@ -77,7 +77,7 @@ internal fun DrivingControlsOverlay(
         ) {
             Text(
                 text = if (state.connected) {
-                    state.deviceName ?: "Logitech G920"
+                    state.statusMessage ?: state.deviceName ?: "Logitech G920"
                 } else {
                     "Logitech G920 — nie podłączono"
                 },
@@ -94,7 +94,7 @@ internal fun DrivingControlsOverlay(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 10.dp)
-                    .alpha(if (state.connected) 1f else 0.48f),
+                    .alpha(if (state.inputAvailable) 1f else 0.48f),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.Bottom
             ) {

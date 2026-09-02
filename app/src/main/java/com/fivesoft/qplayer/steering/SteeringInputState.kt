@@ -4,7 +4,9 @@ import kotlin.math.abs
 
 data class SteeringInputState(
     val connected: Boolean = false,
+    val inputAvailable: Boolean = false,
     val deviceName: String? = null,
+    val statusMessage: String? = null,
     val steering: Float = 0f,
     val accelerator: Float = 0f,
     val brake: Float = 0f

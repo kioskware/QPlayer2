@@ -24,4 +24,25 @@ class SteeringInputStateTest {
         assertEquals(0f, normalizePedalAxis(255f, 0f, 255f, inverted = true))
         assertEquals(1f, normalizePedalAxis(0f, 0f, 255f, inverted = true))
     }
+
+    @Test
+    fun nativeG920ReportProvidesSteeringAndPedals() {
+        val report = byteArrayOf(
+            0x01, 0x0F, 0x00, 0x00, 0x00, 0x80.toByte(),
+            0x00, 0x80.toByte(), 0xFF.toByte(), 0x07
+        )
+
+        val parsed = requireNotNull(LogitechG920ReportParser.parse(report, report.size))
+
+        assertEquals(0f, parsed.steering, 0.001f)
+        assertEquals(1f, parsed.accelerator)
+        assertEquals(0.48f, parsed.brake, 0.01f)
+    }
+
+    @Test
+    fun unrelatedHidReportIsIgnored() {
+        val report = byteArrayOf(0x11, 0, 0, 0, 0, 0, 0, 0)
+
+        assertEquals(null, LogitechG920ReportParser.parse(report, report.size))
+    }
 }

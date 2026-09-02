@@ -11,8 +11,30 @@ import java.util.Locale
 
 class LogitechG920Controller(context: Context) : InputManager.InputDeviceListener {
 
-    private val inputManager = context.applicationContext.getSystemService(InputManager::class.java)
+    private val appContext = context.applicationContext
+    private val inputManager = appContext.getSystemService(InputManager::class.java)
     private val mutableState = MutableStateFlow(SteeringInputState())
+    private val usbTransport = LogitechG920UsbTransport(
+        context = appContext,
+        shouldUseRawInput = { axisMapping?.hasAllAxes != true },
+        listener = object : LogitechG920UsbTransport.Listener {
+            override fun onUsbDeviceDetected(deviceName: String, statusMessage: String) {
+                updateUsbDevice(deviceName, statusMessage)
+            }
+
+            override fun onUsbInputReady(deviceName: String) {
+                updateUsbInputReady(deviceName)
+            }
+
+            override fun onUsbInput(report: LogitechG920Report) {
+                updateUsbInput(report)
+            }
+
+            override fun onUsbDeviceUnavailable() {
+                clearUsbDevice()
+            }
+        }
+    )
 
     val state: StateFlow<SteeringInputState> = mutableState.asStateFlow()
 
@@ -25,6 +47,10 @@ class LogitechG920Controller(context: Context) : InputManager.InputDeviceListene
     @Volatile
     private var axisMapping: AxisMapping? = null
 
+    private var usbDeviceName: String? = null
+    private var usbStatusMessage: String? = null
+    private var usbInputAvailable = false
+
     @Synchronized
     fun start() {
         if (started) {
@@ -33,6 +59,7 @@ class LogitechG920Controller(context: Context) : InputManager.InputDeviceListene
         started = true
         inputManager.registerInputDeviceListener(this, null)
         refreshDevice()
+        usbTransport.start()
     }
 
     @Synchronized
@@ -41,9 +68,13 @@ class LogitechG920Controller(context: Context) : InputManager.InputDeviceListene
             return
         }
         started = false
+        usbTransport.stop()
         inputManager.unregisterInputDeviceListener(this)
         activeDeviceId = null
         axisMapping = null
+        usbDeviceName = null
+        usbStatusMessage = null
+        usbInputAvailable = false
         mutableState.value = SteeringInputState()
     }
 
@@ -70,7 +101,9 @@ class LogitechG920Controller(context: Context) : InputManager.InputDeviceListene
 
         mutableState.value = previousState.copy(
             connected = true,
+            inputAvailable = mapping.hasAllAxes,
             deviceName = device.name,
+            statusMessage = null,
             steering = steering,
             accelerator = accelerator,
             brake = brake
@@ -107,7 +140,7 @@ class LogitechG920Controller(context: Context) : InputManager.InputDeviceListene
         if (device == null) {
             activeDeviceId = null
             axisMapping = null
-            mutableState.value = SteeringInputState()
+            publishUsbState()
         } else {
             connectDevice(device)
         }
@@ -121,11 +154,73 @@ class LogitechG920Controller(context: Context) : InputManager.InputDeviceListene
         val previousState = mutableState.value
         mutableState.value = SteeringInputState(
             connected = true,
+            inputAvailable = axisMapping?.hasAllAxes == true,
             deviceName = device.name,
             steering = if (sameDevice) previousState.steering else 0f,
             accelerator = if (sameDevice) previousState.accelerator else 0f,
             brake = if (sameDevice) previousState.brake else 0f
         )
+    }
+
+    @Synchronized
+    private fun updateUsbDevice(deviceName: String, statusMessage: String) {
+        usbDeviceName = deviceName
+        usbStatusMessage = statusMessage
+        if (activeDeviceId == null) {
+            publishUsbState()
+        }
+    }
+
+    @Synchronized
+    private fun updateUsbInputReady(deviceName: String) {
+        usbDeviceName = deviceName
+        usbStatusMessage = null
+        usbInputAvailable = true
+        if (activeDeviceId == null || axisMapping?.hasAllAxes != true) {
+            publishUsbState()
+        }
+    }
+
+    @Synchronized
+    private fun updateUsbInput(report: LogitechG920Report) {
+        if (!started || activeDeviceId != null && axisMapping?.hasAllAxes == true) return
+        usbInputAvailable = true
+        mutableState.value = SteeringInputState(
+            connected = true,
+            inputAvailable = true,
+            deviceName = usbDeviceName ?: "Logitech G920",
+            steering = report.steering,
+            accelerator = report.accelerator,
+            brake = report.brake
+        )
+    }
+
+    @Synchronized
+    private fun clearUsbDevice() {
+        usbDeviceName = null
+        usbStatusMessage = null
+        usbInputAvailable = false
+        if (activeDeviceId == null) {
+            mutableState.value = SteeringInputState()
+        }
+    }
+
+    private fun publishUsbState() {
+        val name = usbDeviceName
+        mutableState.value = if (name == null) {
+            SteeringInputState()
+        } else {
+            val previousState = mutableState.value
+            SteeringInputState(
+                connected = true,
+                inputAvailable = usbInputAvailable,
+                deviceName = name,
+                statusMessage = usbStatusMessage,
+                steering = if (usbInputAvailable) previousState.steering else 0f,
+                accelerator = if (usbInputAvailable) previousState.accelerator else 0f,
+                brake = if (usbInputAvailable) previousState.brake else 0f
+            )
+        }
     }
 
     private data class AxisMapping(
@@ -135,6 +230,9 @@ class LogitechG920Controller(context: Context) : InputManager.InputDeviceListene
     ) {
         val hasAnyAxis: Boolean
             get() = steering != null || accelerator != null || brake != null
+
+        val hasAllAxes: Boolean
+            get() = steering != null && accelerator != null && brake != null
 
         companion object {
             fun from(device: InputDevice): AxisMapping {
