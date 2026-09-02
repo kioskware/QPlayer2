@@ -48,20 +48,37 @@ import kotlin.math.roundToInt
 class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val preferences = getSharedPreferences(PLAYER_PREFERENCES, MODE_PRIVATE)
+        val savedStreamUrl = preferences.getString(PREF_STREAM_URL, STREAM_URL) ?: STREAM_URL
+        val savedLatencyMs = preferences.getInt(PREF_LATENCY_MS, DEFAULT_LATENCY_MS)
+
         window.setFlags(
             WindowManager.LayoutParams.FLAG_FULLSCREEN,
             WindowManager.LayoutParams.FLAG_FULLSCREEN
         )
         setContent {
-            PlayerGrid()
+            PlayerGrid(
+                initialStreamUrl = savedStreamUrl,
+                initialLatencyMs = savedLatencyMs,
+                onSettingsChanged = { streamUrl, latencyMs ->
+                    preferences.edit()
+                        .putString(PREF_STREAM_URL, streamUrl)
+                        .putInt(PREF_LATENCY_MS, latencyMs)
+                        .apply()
+                }
+            )
         }
     }
 }
 
 @Composable
-private fun PlayerGrid() {
-    var streamUrl by rememberSaveable { mutableStateOf(STREAM_URL) }
-    var latencyMs by rememberSaveable { mutableIntStateOf(0) }
+private fun PlayerGrid(
+    initialStreamUrl: String,
+    initialLatencyMs: Int,
+    onSettingsChanged: (String, Int) -> Unit
+) {
+    var streamUrl by rememberSaveable { mutableStateOf(initialStreamUrl) }
+    var latencyMs by rememberSaveable { mutableIntStateOf(initialLatencyMs) }
     var settingsVisible by rememberSaveable { mutableStateOf(false) }
     val playerState = remember {
         QPlayerState(
@@ -113,10 +130,12 @@ private fun PlayerGrid() {
             initialLatencyMs = latencyMs,
             onDismiss = { settingsVisible = false },
             onConfirm = { streamUri, newLatencyMs ->
-                streamUrl = streamUri.toString()
+                val newStreamUrl = streamUri.toString()
+                streamUrl = newStreamUrl
                 latencyMs = newLatencyMs
                 playerState.mediaSource.value = streamUri
                 playerState.bufferLatency.intValue = newLatencyMs
+                onSettingsChanged(newStreamUrl, newLatencyMs)
                 settingsVisible = false
             }
         )
@@ -200,4 +219,8 @@ private val PLAYER_SIZES = listOf(
 
 private const val PLAYER_ASPECT_RATIO = 16f / 9f
 private const val MAX_LATENCY_MS = 2_000
+private const val DEFAULT_LATENCY_MS = 0
 private const val STREAM_URL = ""
+private const val PLAYER_PREFERENCES = "player_preferences"
+private const val PREF_STREAM_URL = "stream_url"
+private const val PREF_LATENCY_MS = "latency_ms"
