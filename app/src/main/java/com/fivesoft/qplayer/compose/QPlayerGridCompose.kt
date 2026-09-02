@@ -89,6 +89,17 @@ private fun calculatePlayerBounds(
     containerWidth: Int,
     containerHeight: Int
 ): List<PlayerBounds> {
+    if (players.size == 1) {
+        return listOf(
+            PlayerBounds(
+                x = 0,
+                y = 0,
+                width = containerWidth,
+                height = containerHeight
+            )
+        )
+    }
+
     val items = players
         .mapIndexed { index, player -> player.toLayoutItem(index) }
         .sortedWith(
