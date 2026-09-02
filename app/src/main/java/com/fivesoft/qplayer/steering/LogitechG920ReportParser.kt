@@ -6,7 +6,8 @@ internal data class LogitechG920Report(
     val brake: Float,
     val gear: SteeringGear,
     val shiftUpPressed: Boolean,
-    val shiftDownPressed: Boolean
+    val shiftDownPressed: Boolean,
+    val controlsTogglePressed: Boolean
 )
 
 internal object LogitechG920ReportParser {
@@ -43,7 +44,8 @@ internal object LogitechG920ReportParser {
             ),
             gear = decodeGear(buttons),
             shiftUpPressed = buttons.isButtonPressed(SHIFT_UP_BUTTON),
-            shiftDownPressed = buttons.isButtonPressed(SHIFT_DOWN_BUTTON)
+            shiftDownPressed = buttons.isButtonPressed(SHIFT_DOWN_BUTTON),
+            controlsTogglePressed = buttons.isButtonPressed(CONTROLS_TOGGLE_BUTTON)
         )
     }
 
@@ -87,6 +89,7 @@ internal object LogitechG920ReportParser {
     private const val HAT_BITS = 4
     private const val FIRST_BYTE_BUTTON_BITS = 4
     private const val LAST_BUTTON_BYTE_MASK = 0x3F
+    private const val CONTROLS_TOGGLE_BUTTON = 3
     private const val SHIFT_UP_BUTTON = 5
     private const val SHIFT_DOWN_BUTTON = 6
     private const val REVERSE_BUTTON = 12

@@ -85,6 +85,27 @@ class SteeringInputStateTest {
     }
 
     @Test
+    fun nativeG920ReportDecodesXButton() {
+        val report = neutralG920Report().apply {
+            this[1] = (this[1].toInt() or 0x40).toByte()
+        }
+
+        val parsed = requireNotNull(LogitechG920ReportParser.parse(report, report.size))
+
+        assertTrue(parsed.controlsTogglePressed)
+    }
+
+    @Test
+    fun heldXButtonTogglesControlsOnlyOnce() {
+        val toggle = PressToggle(initialValue = true)
+
+        assertFalse(toggle.update(pressed = true))
+        assertFalse(toggle.update(pressed = true))
+        assertFalse(toggle.update(pressed = false))
+        assertTrue(toggle.update(pressed = true))
+    }
+
+    @Test
     fun heldPaddleChangesOnlyOneGear() {
         val selector = PaddleGearSelector()
 

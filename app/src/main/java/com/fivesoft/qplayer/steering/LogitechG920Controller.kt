@@ -15,6 +15,7 @@ class LogitechG920Controller(context: Context) : InputManager.InputDeviceListene
     private val inputManager = appContext.getSystemService(InputManager::class.java)
     private val mutableState = MutableStateFlow(SteeringInputState())
     private val paddleGearSelector = PaddleGearSelector()
+    private val controlsVisibilityToggle = PressToggle(initialValue = true)
     private val usbTransport = LogitechG920UsbTransport(
         context = appContext,
         listener = object : LogitechG920UsbTransport.Listener {
@@ -76,6 +77,7 @@ class LogitechG920Controller(context: Context) : InputManager.InputDeviceListene
         usbStatusMessage = null
         usbInputAvailable = false
         paddleGearSelector.reset()
+        controlsVisibilityToggle.reset(value = true)
         mutableState.value = SteeringInputState()
     }
 
@@ -163,7 +165,8 @@ class LogitechG920Controller(context: Context) : InputManager.InputDeviceListene
             deviceName = device.name,
             steering = if (sameDevice) previousState.steering else 0f,
             accelerator = if (sameDevice) previousState.accelerator else 0f,
-            brake = if (sameDevice) previousState.brake else 0f
+            brake = if (sameDevice) previousState.brake else 0f,
+            controlsVisible = controlsVisibilityToggle.value
         )
     }
 
@@ -182,11 +185,13 @@ class LogitechG920Controller(context: Context) : InputManager.InputDeviceListene
         usbStatusMessage = null
         usbInputAvailable = true
         paddleGearSelector.reset()
+        controlsVisibilityToggle.release()
         mutableState.value = SteeringInputState(
             connected = true,
             inputAvailable = true,
             deviceName = deviceName,
-            gear = SteeringGear.Neutral
+            gear = SteeringGear.Neutral,
+            controlsVisible = controlsVisibilityToggle.value
         )
     }
 
@@ -199,6 +204,7 @@ class LogitechG920Controller(context: Context) : InputManager.InputDeviceListene
             shiftUpPressed = report.shiftUpPressed,
             shiftDownPressed = report.shiftDownPressed
         )
+        val controlsVisible = controlsVisibilityToggle.update(report.controlsTogglePressed)
         mutableState.value = SteeringInputState(
             connected = true,
             inputAvailable = true,
@@ -206,7 +212,8 @@ class LogitechG920Controller(context: Context) : InputManager.InputDeviceListene
             steering = report.steering,
             accelerator = report.accelerator,
             brake = report.brake,
-            gear = selectedGear
+            gear = selectedGear,
+            controlsVisible = controlsVisible
         )
     }
 
@@ -216,13 +223,14 @@ class LogitechG920Controller(context: Context) : InputManager.InputDeviceListene
         usbStatusMessage = null
         usbInputAvailable = false
         paddleGearSelector.reset()
+        controlsVisibilityToggle.release()
         refreshDevice()
     }
 
     private fun publishUsbState() {
         val name = usbDeviceName
         mutableState.value = if (name == null) {
-            SteeringInputState()
+            SteeringInputState(controlsVisible = controlsVisibilityToggle.value)
         } else {
             val previousState = mutableState.value
             SteeringInputState(
@@ -233,7 +241,8 @@ class LogitechG920Controller(context: Context) : InputManager.InputDeviceListene
                 steering = if (usbInputAvailable) previousState.steering else 0f,
                 accelerator = if (usbInputAvailable) previousState.accelerator else 0f,
                 brake = if (usbInputAvailable) previousState.brake else 0f,
-                gear = if (usbInputAvailable) previousState.gear else SteeringGear.Unknown
+                gear = if (usbInputAvailable) previousState.gear else SteeringGear.Unknown,
+                controlsVisible = controlsVisibilityToggle.value
             )
         }
     }

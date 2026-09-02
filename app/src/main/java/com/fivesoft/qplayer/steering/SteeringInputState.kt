@@ -10,7 +10,8 @@ data class SteeringInputState(
     val steering: Float = 0f,
     val accelerator: Float = 0f,
     val brake: Float = 0f,
-    val gear: SteeringGear = SteeringGear.Unknown
+    val gear: SteeringGear = SteeringGear.Unknown,
+    val controlsVisible: Boolean = true
 )
 
 enum class SteeringGear(val displayValue: String) {

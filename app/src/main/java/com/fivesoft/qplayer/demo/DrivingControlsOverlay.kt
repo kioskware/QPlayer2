@@ -53,6 +53,7 @@ internal fun DrivingControlsOverlay(
     modifier: Modifier = Modifier
 ) {
     val state by steeringState.collectAsState()
+    if (!state.controlsVisible) return
 
     BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
         val compact = maxWidth < 480.dp
