@@ -18,7 +18,6 @@ import androidx.core.content.ContextCompat
 
 internal class LogitechG920UsbTransport(
     context: Context,
-    private val shouldUseRawInput: () -> Boolean,
     private val listener: Listener
 ) {
 
@@ -173,7 +172,7 @@ internal class LogitechG920UsbTransport(
             switchToHidMode(device)
         } else {
             mainHandler.postDelayed(
-                { if (started) openRawInputIfNeeded(device) },
+                { if (started) openRawInput(device) },
                 INPUT_DEVICE_GRACE_PERIOD_MS
             )
         }
@@ -237,12 +236,8 @@ internal class LogitechG920UsbTransport(
     }
 
     @Synchronized
-    private fun openRawInputIfNeeded(device: UsbDevice) {
+    private fun openRawInput(device: UsbDevice) {
         if (!started || configuredDeviceName == device.deviceName) return
-        if (!shouldUseRawInput()) {
-            Log.i(TAG, "Android InputDevice is available; raw USB fallback is not needed")
-            return
-        }
 
         val binding = device.findEndpoint(
             direction = UsbConstants.USB_DIR_IN,

@@ -9,8 +9,21 @@ data class SteeringInputState(
     val statusMessage: String? = null,
     val steering: Float = 0f,
     val accelerator: Float = 0f,
-    val brake: Float = 0f
+    val brake: Float = 0f,
+    val gear: SteeringGear = SteeringGear.Unknown
 )
+
+enum class SteeringGear(val displayValue: String) {
+    Unknown("\u2014"),
+    Reverse("R"),
+    Neutral("N"),
+    First("1"),
+    Second("2"),
+    Third("3"),
+    Fourth("4"),
+    Fifth("5"),
+    Sixth("6")
+}
 
 internal fun normalizeSteeringAxis(
     value: Float,

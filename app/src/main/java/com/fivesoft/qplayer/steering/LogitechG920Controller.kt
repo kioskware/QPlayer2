@@ -16,7 +16,6 @@ class LogitechG920Controller(context: Context) : InputManager.InputDeviceListene
     private val mutableState = MutableStateFlow(SteeringInputState())
     private val usbTransport = LogitechG920UsbTransport(
         context = appContext,
-        shouldUseRawInput = { axisMapping?.hasAllAxes != true },
         listener = object : LogitechG920UsbTransport.Listener {
             override fun onUsbDeviceDetected(deviceName: String, statusMessage: String) {
                 updateUsbDevice(deviceName, statusMessage)
@@ -79,7 +78,7 @@ class LogitechG920Controller(context: Context) : InputManager.InputDeviceListene
     }
 
     fun handleMotionEvent(event: MotionEvent): Boolean {
-        if (!started || event.actionMasked != MotionEvent.ACTION_MOVE ||
+        if (!started || usbInputAvailable || event.actionMasked != MotionEvent.ACTION_MOVE ||
             !event.isFromSource(InputDevice.SOURCE_JOYSTICK)
         ) {
             return false
@@ -151,6 +150,10 @@ class LogitechG920Controller(context: Context) : InputManager.InputDeviceListene
         val sameDevice = activeDeviceId == device.id
         activeDeviceId = device.id
         axisMapping = AxisMapping.from(device)
+        if (usbInputAvailable) {
+            publishUsbState()
+            return
+        }
         val previousState = mutableState.value
         mutableState.value = SteeringInputState(
             connected = true,
@@ -176,14 +179,16 @@ class LogitechG920Controller(context: Context) : InputManager.InputDeviceListene
         usbDeviceName = deviceName
         usbStatusMessage = null
         usbInputAvailable = true
-        if (activeDeviceId == null || axisMapping?.hasAllAxes != true) {
-            publishUsbState()
-        }
+        mutableState.value = SteeringInputState(
+            connected = true,
+            inputAvailable = true,
+            deviceName = deviceName
+        )
     }
 
     @Synchronized
     private fun updateUsbInput(report: LogitechG920Report) {
-        if (!started || activeDeviceId != null && axisMapping?.hasAllAxes == true) return
+        if (!started) return
         usbInputAvailable = true
         mutableState.value = SteeringInputState(
             connected = true,
@@ -191,7 +196,8 @@ class LogitechG920Controller(context: Context) : InputManager.InputDeviceListene
             deviceName = usbDeviceName ?: "Logitech G920",
             steering = report.steering,
             accelerator = report.accelerator,
-            brake = report.brake
+            brake = report.brake,
+            gear = report.gear
         )
     }
 
@@ -200,9 +206,7 @@ class LogitechG920Controller(context: Context) : InputManager.InputDeviceListene
         usbDeviceName = null
         usbStatusMessage = null
         usbInputAvailable = false
-        if (activeDeviceId == null) {
-            mutableState.value = SteeringInputState()
-        }
+        refreshDevice()
     }
 
     private fun publishUsbState() {
@@ -218,7 +222,8 @@ class LogitechG920Controller(context: Context) : InputManager.InputDeviceListene
                 statusMessage = usbStatusMessage,
                 steering = if (usbInputAvailable) previousState.steering else 0f,
                 accelerator = if (usbInputAvailable) previousState.accelerator else 0f,
-                brake = if (usbInputAvailable) previousState.brake else 0f
+                brake = if (usbInputAvailable) previousState.brake else 0f,
+                gear = if (usbInputAvailable) previousState.gear else SteeringGear.Unknown
             )
         }
     }
@@ -241,14 +246,14 @@ class LogitechG920Controller(context: Context) : InputManager.InputDeviceListene
                     AxisCandidate(MotionEvent.AXIS_X)
                 )
                 val accelerator = device.findAxis(
+                    AxisCandidate(MotionEvent.AXIS_Y, inverted = true),
                     AxisCandidate(MotionEvent.AXIS_GAS),
-                    AxisCandidate(MotionEvent.AXIS_RTRIGGER),
-                    AxisCandidate(MotionEvent.AXIS_Z, inverted = true)
+                    AxisCandidate(MotionEvent.AXIS_RTRIGGER)
                 )
                 val brake = device.findAxis(
+                    AxisCandidate(MotionEvent.AXIS_Z, inverted = true),
                     AxisCandidate(MotionEvent.AXIS_BRAKE),
                     AxisCandidate(MotionEvent.AXIS_LTRIGGER),
-                    AxisCandidate(MotionEvent.AXIS_RZ, inverted = true),
                     excludedAxis = accelerator?.axis
                 )
                 return AxisMapping(steering, accelerator, brake)

@@ -37,6 +37,31 @@ class SteeringInputStateTest {
         assertEquals(0f, parsed.steering, 0.001f)
         assertEquals(1f, parsed.accelerator)
         assertEquals(0.48f, parsed.brake, 0.01f)
+        assertEquals(SteeringGear.Neutral, parsed.gear)
+    }
+
+    @Test
+    fun nativeG920ReportDecodesEveryShifterPosition() {
+        val positions = listOf(
+            Triple(2, 0x80, SteeringGear.Reverse),
+            Triple(3, 0x01, SteeringGear.First),
+            Triple(3, 0x02, SteeringGear.Second),
+            Triple(3, 0x04, SteeringGear.Third),
+            Triple(3, 0x08, SteeringGear.Fourth),
+            Triple(3, 0x10, SteeringGear.Fifth),
+            Triple(3, 0x20, SteeringGear.Sixth)
+        )
+
+        positions.forEach { (byteOffset, buttonMask, expectedGear) ->
+            val report = neutralG920Report().apply {
+                this[byteOffset] = buttonMask.toByte()
+            }
+
+            assertEquals(
+                expectedGear,
+                requireNotNull(LogitechG920ReportParser.parse(report, report.size)).gear
+            )
+        }
     }
 
     @Test
@@ -45,4 +70,9 @@ class SteeringInputStateTest {
 
         assertEquals(null, LogitechG920ReportParser.parse(report, report.size))
     }
+
+    private fun neutralG920Report(): ByteArray = byteArrayOf(
+        0x01, 0x0F, 0x00, 0x00, 0x00, 0x80.toByte(),
+        0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0x07
+    )
 }

@@ -59,6 +59,7 @@ internal fun DrivingControlsOverlay(
         val wheelSize = if (compact) 104.dp else 144.dp
         val brakeWidth = if (compact) 50.dp else 60.dp
         val brakeHeight = if (compact) 78.dp else 92.dp
+        val gearWidth = if (compact) 42.dp else 50.dp
         val gasWidth = if (compact) 62.dp else 74.dp
         val gasHeight = if (compact) 102.dp else 120.dp
         val edgePadding = if (compact) 16.dp else 32.dp
@@ -107,6 +108,11 @@ internal fun DrivingControlsOverlay(
                     horizontalArrangement = Arrangement.spacedBy(pedalSpacing),
                     verticalAlignment = Alignment.Bottom
                 ) {
+                    GearIndicator(
+                        value = state.gear.displayValue,
+                        width = gearWidth,
+                        height = brakeHeight
+                    )
                     DrivingPedal(
                         label = "HAMULEC",
                         value = state.brake,
@@ -124,6 +130,37 @@ internal fun DrivingControlsOverlay(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun GearIndicator(value: String, width: Dp, height: Dp) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(5.dp),
+        modifier = Modifier.semantics {
+            contentDescription = "Bieg $value"
+        }
+    ) {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .width(width)
+                .height(height)
+                .background(Color.Black.copy(alpha = 0.34f), GEAR_SHAPE)
+                .border(2.dp, Color(0xFFB8BBC0).copy(alpha = 0.68f), GEAR_SHAPE)
+        ) {
+            Text(
+                text = value,
+                color = Color.White.copy(alpha = 0.84f),
+                fontSize = 25.sp
+            )
+        }
+        Text(
+            text = "BIEG",
+            color = Color.White.copy(alpha = 0.78f),
+            fontSize = 10.sp
+        )
     }
 }
 
@@ -252,5 +289,6 @@ private fun formatSignedPercent(value: Float): String {
 }
 
 private val PEDAL_SHAPE = RoundedCornerShape(16.dp)
+private val GEAR_SHAPE = RoundedCornerShape(12.dp)
 private val STATUS_SHAPE = RoundedCornerShape(50)
 private const val MAX_STEERING_INDICATOR_ROTATION = 225f
