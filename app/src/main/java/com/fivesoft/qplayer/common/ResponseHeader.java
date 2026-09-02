@@ -12,4 +12,16 @@ public class ResponseHeader {
         this.headers = headers;
     }
 
+    public int getCode() {
+        return code;
+    }
+
+    public String getMessage() {
+        return message;
+    }
+
+    public Headers getHeaders() {
+        return headers;
+    }
+
 }
