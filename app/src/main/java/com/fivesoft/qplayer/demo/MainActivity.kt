@@ -200,4 +200,4 @@ private val PLAYER_SIZES = listOf(
 
 private const val PLAYER_ASPECT_RATIO = 16f / 9f
 private const val MAX_LATENCY_MS = 2_000
-private const val STREAM_URL = "rtsp://170.93.143.139/rtplive/470011e600ef003a004ee33696235daa"
+private const val STREAM_URL = ""
