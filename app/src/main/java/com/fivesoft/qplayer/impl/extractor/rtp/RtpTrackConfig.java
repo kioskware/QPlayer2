@@ -5,6 +5,7 @@ import android.util.Base64;
 import com.fivesoft.qplayer.base.track.AudioTrack;
 import com.fivesoft.qplayer.base.track.Track;
 import com.fivesoft.qplayer.base.track.Tracks;
+import com.fivesoft.qplayer.base.track.VideoTrack;
 
 import java.io.UnsupportedEncodingException;
 import java.net.URI;
@@ -56,7 +57,7 @@ public final class RtpTrackConfig {
                     int type = "video".equals(fields[0]) ? Track.VIDEO
                             : "audio".equals(fields[0]) ? Track.AUDIO : -1;
                     if (type != -1) {
-                        current = new MediaDescription(type);
+                        current = new MediaDescription();
                         for (int i = 3; i < fields.length; i++) {
                             int payload = Integer.parseInt(fields[i]);
                             current.builders.put(payload, new Track.Builder(type)
@@ -143,7 +144,7 @@ public final class RtpTrackConfig {
                     throw new IllegalArgumentException("Unsupported AAC RTP parameter: " + field);
                 }
             }
-        } else if (track.getType() != Track.VIDEO || !"h264".equalsIgnoreCase(track.getFormat())) {
+        } else if (!(track instanceof VideoTrack) || !"h264".equalsIgnoreCase(track.getFormat())) {
             throw new IllegalArgumentException("Unsupported RTP codec: " + track.getFormat());
         } else {
             Object mode = track.getMetadata("packetization-mode");
@@ -218,6 +219,5 @@ public final class RtpTrackConfig {
     private static final class MediaDescription {
         final Map<Integer, Track.Builder> builders = new LinkedHashMap<>();
         final Map<Integer, Map<String, String>> fmtp = new HashMap<>();
-        MediaDescription(int type) {}
     }
 }
