@@ -6,7 +6,7 @@ import com.fivesoft.qplayer.base.components.MediaDecoder
 import com.fivesoft.qplayer.base.components.MediaExtractor
 import com.fivesoft.qplayer.common.TimeoutException
 import com.fivesoft.qplayer.common.TrackSelector
-import com.fivesoft.qplayer.common.resolver.MediaExtractorResolver
+import com.fivesoft.qplayer.core.resolvers.MediaExtractorResolver
 import com.fivesoft.qplayer.core.FrameBuilder
 import com.fivesoft.qplayer.impl.extractor.ts.TsTestData
 import com.fivesoft.qplayer.impl.source.RtpDataSource
