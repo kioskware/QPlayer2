@@ -18,6 +18,59 @@ public class RtpParser {
 
     private final static int RTP_HEADER_SIZE = 12;
 
+    /** A validated RTP datagram. Payload offsets refer to the supplied array. */
+    public static final class RtpPacket {
+        public final RtpHeader header;
+        public final int payloadOffset;
+
+        private RtpPacket(RtpHeader header, int payloadOffset) {
+            this.header = header;
+            this.payloadOffset = payloadOffset;
+        }
+    }
+
+    /**
+     * Parses one complete datagram, including CSRCs, extensions and padding (RFC 3550).
+     * Invalid or truncated packets are discarded without reading into the next datagram.
+     */
+    @Nullable
+    public static RtpPacket parsePacket(@NonNull byte[] data, int offset, int length) {
+        if (offset < 0 || length < RTP_HEADER_SIZE || offset > data.length - length) {
+            return null;
+        }
+        byte[] fixedHeader = new byte[RTP_HEADER_SIZE];
+        System.arraycopy(data, offset, fixedHeader, 0, RTP_HEADER_SIZE);
+        RtpHeader header = RtpHeader.parseData(fixedHeader, length);
+        if (header == null) {
+            return null;
+        }
+        int end = offset + length;
+        int payloadOffset = offset + RTP_HEADER_SIZE + header.cc * 4;
+        if (payloadOffset > end) {
+            return null;
+        }
+        if (header.extension != 0) {
+            if (end - payloadOffset < 4) {
+                return null;
+            }
+            int words = ((data[payloadOffset + 2] & 0xff) << 8)
+                    | (data[payloadOffset + 3] & 0xff);
+            payloadOffset += 4 + words * 4;
+            if (payloadOffset > end) {
+                return null;
+            }
+        }
+        if (header.padding != 0) {
+            int paddingLength = data[end - 1] & 0xff;
+            if (paddingLength == 0 || paddingLength > end - payloadOffset) {
+                return null;
+            }
+            end -= paddingLength;
+        }
+        header.payloadSize = end - payloadOffset;
+        return new RtpPacket(header, payloadOffset);
+    }
+
     public static class RtpHeader {
 
         public int version;
