@@ -12,8 +12,10 @@ import com.fivesoft.qplayer.core.resolvers.VideoDecoderResolver;
 import com.fivesoft.qplayer.impl.decoder.audio.aac.AACDecoder;
 import com.fivesoft.qplayer.impl.decoder.video.h264.H264Decoder;
 import com.fivesoft.qplayer.impl.extractor.rtsp.RtspMediaExtractor;
+import com.fivesoft.qplayer.impl.extractor.rtp.RtpMediaExtractor;
 import com.fivesoft.qplayer.impl.source.FileDataSource;
 import com.fivesoft.qplayer.impl.source.SocketDataSource;
+import com.fivesoft.qplayer.impl.source.UdpDataSource;
 
 /**
  * This class is used to register all components of the api like:
@@ -45,11 +47,13 @@ public class ComponentManifest {
         //Register sources
         DataSourceResolver.getInstance()
                 .registerCreator(SocketDataSource.CREATOR)
+                .registerCreator(UdpDataSource.CREATOR)
                 .registerCreator(FileDataSource.CREATOR);
 
         //Register extractors
         MediaExtractorResolver.getInstance()
-                .registerCreator(RtspMediaExtractor.CREATOR);
+                .registerCreator(RtspMediaExtractor.CREATOR)
+                .registerCreator(RtpMediaExtractor.CREATOR);
 
         //Register decoders
         VideoDecoderResolver.getInstance()
