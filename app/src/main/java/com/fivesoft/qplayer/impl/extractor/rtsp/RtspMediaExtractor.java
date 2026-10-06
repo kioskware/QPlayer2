@@ -26,6 +26,7 @@ import com.fivesoft.qplayer.common.X;
 import com.fivesoft.qplayer.common.resolver.Creator;
 import com.fivesoft.qplayer.impl.decoder.video.h264.SPSParser;
 import com.fivesoft.qplayer.impl.extractor.rtp.RtpParser;
+import com.fivesoft.qplayer.impl.extractor.rtp.RtpSample;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -295,7 +296,7 @@ public class RtspMediaExtractor extends MediaExtractor {
             }
 
             lastTimestamp = timestamp;
-            return new Sample(readBuffer, 0, sampleLength, timestamp, track);
+            return new RtpSample(readBuffer, 0, sampleLength, timestamp, track, header, false);
         }
     }
 

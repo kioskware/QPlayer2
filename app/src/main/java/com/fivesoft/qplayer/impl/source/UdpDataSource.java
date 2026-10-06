@@ -49,6 +49,7 @@ public class UdpDataSource extends DatagramDataSource {
     private volatile InputStream inputStream;
     private NetworkInterface networkInterface;
     private volatile InetSocketAddress lastSender;
+    private volatile InetAddress multicastAddress;
 
     public UdpDataSource(@NonNull String host, int port) {
         this.host = Objects.requireNonNull(host);
@@ -100,6 +101,7 @@ public class UdpDataSource extends DatagramDataSource {
                 }
                 socket = opened;
                 lastSender = null;
+                multicastAddress = address.isMulticastAddress() ? address : null;
                 inputStream = new DatagramInputStream(opened);
             } catch (IOException | RuntimeException error) {
                 opened.close();
@@ -179,6 +181,12 @@ public class UdpDataSource extends DatagramDataSource {
         return lastSender;
     }
 
+    @Nullable
+    public InetSocketAddress getMulticastDestination() {
+        InetAddress group = multicastAddress;
+        return group == null ? null : new InetSocketAddress(group, getLocalPort());
+    }
+
     /** Sends a datagram through the receiving socket, preserving the local port. */
     public boolean sendDatagram(@NonNull byte[] data, @Nullable InetSocketAddress destination)
             throws IOException {
@@ -191,7 +199,8 @@ public class UdpDataSource extends DatagramDataSource {
 
     @Override
     public boolean sendControlDatagram(@NonNull byte[] data) throws IOException {
-        return sendDatagram(data, lastSender);
+        InetSocketAddress group = getMulticastDestination();
+        return sendDatagram(data, group == null ? lastSender : group);
     }
 
     @Nullable
@@ -206,6 +215,7 @@ public class UdpDataSource extends DatagramDataSource {
             MulticastSocket current = socket;
             socket = null;
             inputStream = null;
+            multicastAddress = null;
             if (current != null) {
                 current.close();
             }

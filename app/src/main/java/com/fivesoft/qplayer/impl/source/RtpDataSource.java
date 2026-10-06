@@ -32,7 +32,19 @@ public class RtpDataSource extends UdpDataSource {
     private final UdpDataSource controlSource;
 
     public RtpDataSource(@NonNull URI uri) {
-        super(uri);
+        this(uri.getHost(), uri.getPort(), controlPort(uri));
+    }
+
+    /** A negative RTCP port enables mux; zero binds an ephemeral port. */
+    public RtpDataSource(@NonNull String host, int rtpPort, int rtcpPort) {
+        super(host, rtpPort);
+        if (rtcpPort > 65535 || (rtcpPort > 0 && rtcpPort == rtpPort)) {
+            throw new IllegalArgumentException("Invalid RTCP port");
+        }
+        controlSource = rtcpPort < 0 ? null : new UdpDataSource(host, rtcpPort);
+    }
+
+    private static int controlPort(URI uri) {
         int controlPort = uri.getPort() + 1;
         boolean mux = false;
         if (uri.getRawQuery() != null) {
@@ -52,7 +64,7 @@ public class RtpDataSource extends UdpDataSource {
         if (!mux && (controlPort <= 0 || controlPort > 65535 || controlPort == uri.getPort())) {
             throw new IllegalArgumentException("Invalid RTCP port; use rtcp-mux=true for a shared port");
         }
-        controlSource = mux ? null : new UdpDataSource(uri.getHost(), controlPort);
+        return mux ? -1 : controlPort;
     }
 
     public int getRtcpLocalPort() {
@@ -67,6 +79,7 @@ public class RtpDataSource extends UdpDataSource {
 
     @Override
     public void connect(int timeout) throws IOException {
+        if (super.isConnected()) throw new IllegalStateException("Already connected");
         super.connect(timeout);
         try {
             if (controlSource != null) controlSource.connect(timeout);
@@ -106,6 +119,8 @@ public class RtpDataSource extends UdpDataSource {
     @Override
     public boolean sendControlDatagram(@NonNull byte[] data) throws IOException {
         if (controlSource == null) return super.sendControlDatagram(data);
+        InetSocketAddress group = controlSource.getMulticastDestination();
+        if (group != null) return controlSource.sendDatagram(data, group);
         InetSocketAddress destination = controlSource.getLastSenderAddress();
         if (destination == null) {
             InetSocketAddress mediaSender = getLastSenderAddress();

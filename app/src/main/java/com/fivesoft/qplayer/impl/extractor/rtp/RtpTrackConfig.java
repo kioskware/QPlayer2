@@ -6,6 +6,7 @@ import com.fivesoft.qplayer.base.track.AudioTrack;
 import com.fivesoft.qplayer.base.track.Track;
 import com.fivesoft.qplayer.base.track.Tracks;
 import com.fivesoft.qplayer.base.track.VideoTrack;
+import com.fivesoft.qplayer.impl.decoder.video.h264.SPSParser;
 
 import java.io.UnsupportedEncodingException;
 import java.net.URI;
@@ -132,6 +133,10 @@ public final class RtpTrackConfig {
             if (track.getCsd().getCsd(0) == null) {
                 throw new IllegalArgumentException("AAC requires an AudioSpecificConfig (config)");
             }
+            validateIntegerParameter(track, "sizelength", 1, 31);
+            validateIntegerParameter(track, "indexlength", 0, 31);
+            validateIntegerParameter(track, "indexdeltalength", 0, 31);
+            validateIntegerParameter(track, "constantduration", 1, Integer.MAX_VALUE);
             String mode = audio.getMode();
             if (mode == null) audio.setMode("AAC-hbr");
             else if (!"AAC-hbr".equalsIgnoreCase(mode) && !"AAC-lbr".equalsIgnoreCase(mode)) {
@@ -155,10 +160,18 @@ public final class RtpTrackConfig {
     }
 
     private static Track validate(Track.Builder builder) {
+        if (builder.getClockRate() <= 0) throw new IllegalArgumentException("Missing RTP clock rate");
         Track track = builder.build();
         if (track == null) throw new IllegalArgumentException("Invalid RTP track");
         validateTrack(track);
         return track;
+    }
+
+    private static void validateIntegerParameter(Track track, String key, int minimum, int maximum) {
+        Object value = track.getMetadata(key);
+        if (value == null) return;
+        int number = Integer.parseInt(value.toString());
+        if (number < minimum || number > maximum) throw new IllegalArgumentException("Invalid AAC RTP parameter: " + key);
     }
 
     private static void applyFmtp(Track.Builder builder, Map<String, String> params) {
@@ -170,8 +183,15 @@ public final class RtpTrackConfig {
             } else if ("sprop-parameter-sets".equals(key)) {
                 String[] sets = value.split(",");
                 if (sets.length != 2) throw new IllegalArgumentException("Expected SPS and PPS");
-                builder.setCsd(0, Base64.decode(sets[0], Base64.NO_WRAP));
+                byte[] sps = Base64.decode(sets[0], Base64.NO_WRAP);
+                builder.setCsd(0, sps);
                 builder.setCsd(1, Base64.decode(sets[1], Base64.NO_WRAP));
+                if (builder.getType() == Track.VIDEO) {
+                    SPSParser.VideoParams video = SPSParser.parseSPSStatic(sps, 0, sps.length);
+                    builder.setWidth(video.width).setHeight(video.height)
+                            .setPixelAspectRatio(video.getPixelAspectRatio());
+                    if (video.frameRate > 0) builder.setFps(video.frameRate);
+                }
             } else if ("mode".equals(key)) {
                 builder.setMode(value);
             } else {
