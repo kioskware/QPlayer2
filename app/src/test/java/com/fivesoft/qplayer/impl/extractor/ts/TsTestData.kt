@@ -44,8 +44,10 @@ object TsTestData {
         return output
     }
 
-    fun pat(vararg programs: Pair<Int, Int>): ByteArray {
-        var body = byteArrayOf(0, 0xb0.toByte(), 0, 0, 1, 0xc1.toByte(), 0, 0)
+    fun pat(vararg programs: Pair<Int, Int>, version: Int = 0, sectionNumber: Int = 0,
+            lastSection: Int = 0): ByteArray {
+        var body = byteArrayOf(0, 0xb0.toByte(), 0, 0, 1, (0xc1 or (version shl 1)).toByte(),
+            sectionNumber.toByte(), lastSection.toByte())
         for ((program, pid) in programs) body += byteArrayOf((program shr 8).toByte(), program.toByte(),
             (0xe0 or (pid shr 8)).toByte(), pid.toByte())
         return section(body)

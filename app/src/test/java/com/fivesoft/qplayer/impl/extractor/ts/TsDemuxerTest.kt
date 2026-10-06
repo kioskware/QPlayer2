@@ -78,6 +78,21 @@ class TsDemuxerTest {
         assertEquals(2, demuxer.tracks.size())
     }
 
+    @Test fun waitsForCompletePatAndFollowsProgramRemoval() {
+        val demuxer = TsDemuxer(TrackSelector.ALL, 0)
+        demuxer.accept(packet(0, byteArrayOf(0) + pat(2 to 200, sectionNumber = 1, lastSection = 1)))
+        demuxer.accept(packet(200, byteArrayOf(0) + pmt(program = 2)))
+        assertFalse(demuxer.isProgramMapRead)
+        demuxer.accept(packet(0, byteArrayOf(0) + pat(1 to 100, lastSection = 1), cc = 1))
+        demuxer.accept(packet(100, byteArrayOf(0) + pmt()))
+        assertEquals(1, demuxer.tracks.videoTrack!!.getMetadata("ts-program"))
+        demuxer.accept(packet(0, byteArrayOf(0) + pat(2 to 200, version = 1), cc = 2))
+        assertFalse(demuxer.isProgramMapRead)
+        assertEquals(0, demuxer.tracks.size())
+        demuxer.accept(packet(200, byteArrayOf(0) + pmt(program = 2)))
+        assertEquals(2, demuxer.tracks.videoTrack!!.getMetadata("ts-program"))
+    }
+
     @Test fun assemblesPesHeaderNalPrefixesAndAdtsAcrossTsPackets() {
         val demuxer = demuxer()
         val largeNal = byteArrayOf(0x65) + ByteArray(400) { 0x11 }

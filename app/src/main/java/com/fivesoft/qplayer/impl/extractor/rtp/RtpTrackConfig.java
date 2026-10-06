@@ -42,7 +42,7 @@ public final class RtpTrackConfig {
     }
 
     /**
-     * Parses H.264 and MPEG4-GENERIC media descriptions. The caller supplies the
+     * Parses H.264, MPEG4-GENERIC and MP2T media descriptions. The caller supplies the
      * transport; SDP connection addresses and ports do not open additional sockets.
      */
     public static Tracks fromSdp(String sdp) {

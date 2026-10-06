@@ -57,6 +57,18 @@ class RtpTransportStreamMediaExtractorTest {
         assertArrayEquals(byteArrayOf(0x11, 0x90.toByte()), audio.track.csd.getCsd(0))
     }
 
+    @Test fun autoDetectedElementaryRtpKeepsFirstPacketAndForwardsBufferReuse() {
+        val source = Packets(TsTestData.rtp(TsTestData.idr, pt = 96))
+        val extractor = RtpStreamMediaExtractor(source, uri)
+        extractor.setAllowReuseBuffers(true)
+        extractor.prepare(1000)
+        assertEquals(MediaDecoder.FORMAT_RTP, extractor.sampleFormat)
+        assertEquals(1, extractor.tracks.size())
+        val sample = extractor.nextSample()!!
+        assertEquals(12, sample.offset)
+        assertArrayEquals(TsTestData.idr, sample.array.copyOfRange(sample.offset, sample.offset + sample.length))
+    }
+
     @Test fun supportsDynamicMp2tMappingAndStaticOrDynamicSdp() {
         val sdp = listOf("m=video 1234 RTP/AVP 33",
             "m=video 1234 RTP/AVP 98\na=rtpmap:98 MP2T/90000")

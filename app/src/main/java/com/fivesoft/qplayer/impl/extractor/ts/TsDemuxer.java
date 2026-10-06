@@ -32,6 +32,12 @@ public final class TsDemuxer {
     private int pmtVersion = -1;
     private int pendingPmtVersion = -1;
     private final Map<Integer, byte[]> pmtSections = new HashMap<>();
+    private final Map<Integer, byte[]> patSections = new HashMap<>();
+    private int patVersion = -1;
+    private int patId = -1;
+    private int pendingPatVersion = -1;
+    private int pendingPatId = -1;
+    private int patLastSection = -1;
     private boolean programMapRead;
     private long ptsOrigin = -1;
     private long lastPts;
@@ -60,6 +66,8 @@ public final class TsDemuxer {
         Arrays.fill(continuity, -1);
         program = pmtPid = pmtVersion = pendingPmtVersion = -1;
         pmtSections.clear();
+        patSections.clear();
+        patVersion = patId = pendingPatVersion = pendingPatId = patLastSection = -1;
         programMapRead = false;
         ptsOrigin = -1;
         lastPts = 0;
@@ -126,18 +134,39 @@ public final class TsDemuxer {
 
     private void readPat(byte[] data) {
         if (data[0] != 0 || data.length < 12 || (data[5] & 1) == 0) return;
-        int chosenProgram = -1;
-        int chosenPid = -1;
-        for (int position = 8; position + 4 <= data.length - 4; position += 4) {
-            int number = unsignedShort(data, position);
-            if (number == 0) continue;
-            if (number == requestedProgram || (requestedProgram == 0 && (program == -1 || number == program))) {
-                chosenProgram = number;
-                chosenPid = unsignedShort(data, position + 2) & 0x1fff;
-                break;
+        int id = unsignedShort(data, 3);
+        int version = (data[5] >> 1) & 31;
+        if (id == patId && version == patVersion) return;
+        int sectionNumber = data[6] & 0xff;
+        int lastSection = data[7] & 0xff;
+        if (sectionNumber > lastSection || (data.length - 12) % 4 != 0) return;
+        if (id != pendingPatId || version != pendingPatVersion || lastSection != patLastSection) {
+            patSections.clear();
+            pendingPatId = id;
+            pendingPatVersion = version;
+            patLastSection = lastSection;
+        }
+        patSections.put(sectionNumber, data);
+        for (int i = 0; i <= lastSection; i++) if (!patSections.containsKey(i)) return;
+        Map<Integer, Integer> programs = new LinkedHashMap<>();
+        for (int i = 0; i <= lastSection; i++) {
+            byte[] section = patSections.get(i);
+            for (int position = 8; position + 4 <= section.length - 4; position += 4) {
+                int number = unsignedShort(section, position);
+                int pid = unsignedShort(section, position + 2) & 0x1fff;
+                if (number != 0 && pid != 0 && pid != 0x1fff) programs.put(number, pid);
             }
         }
-        if (chosenProgram == -1 || chosenPid == 0 || chosenPid == 0x1fff) return;
+        int chosenProgram = -1;
+        int chosenPid = -1;
+        if (requestedProgram != 0 && programs.containsKey(requestedProgram)) {
+            chosenProgram = requestedProgram;
+        } else if (requestedProgram == 0 && !programs.isEmpty()) {
+            chosenProgram = programs.containsKey(program) ? program : programs.keySet().iterator().next();
+        }
+        if (chosenProgram != -1) chosenPid = programs.get(chosenProgram);
+        patVersion = version;
+        patId = id;
         if (chosenProgram != program || chosenPid != pmtPid) {
             if (pmtPid != -1) sections.remove(pmtPid);
             tracks.clear();
@@ -148,7 +177,10 @@ public final class TsDemuxer {
             pmtSections.clear();
             program = chosenProgram;
             pmtPid = chosenPid;
-            sections.put(pmtPid, new SectionReader(false));
+            if (pmtPid != -1) {
+                continuity[pmtPid] = -1;
+                sections.put(pmtPid, new SectionReader(false));
+            }
         }
     }
 

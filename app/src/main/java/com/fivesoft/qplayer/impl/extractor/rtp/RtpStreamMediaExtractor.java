@@ -53,6 +53,12 @@ public final class RtpStreamMediaExtractor extends MediaExtractor {
     public void setRtcpReportInterval(int intervalMs) { transport.setRtcpReportInterval(intervalMs); }
 
     @Override
+    public void setAllowReuseBuffers(boolean allowReuseBuffers) {
+        super.setAllowReuseBuffers(allowReuseBuffers);
+        transport.setAllowReuseBuffers(allowReuseBuffers);
+    }
+
+    @Override
     public void prepare(int timeout) throws IOException, InterruptedException {
         if (prepared) throw new IllegalStateException("Already prepared");
         ts.reset();
