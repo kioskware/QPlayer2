@@ -27,12 +27,13 @@ public final class RtpTrackConfig {
         if (params.containsKey("sdp")) {
             return fromSdp(params.get("sdp"));
         }
-        String codec = params.getOrDefault("codec", "h264");
+        String codec = params.getOrDefault("codec", integer(params, "payload-type", 96) == 33 ? "mp2t" : "h264");
+        boolean transportStream = isTransportStream(codec);
         boolean audio = "aac".equalsIgnoreCase(codec) || "mpeg4-generic".equalsIgnoreCase(codec);
         Track.Builder builder = new Track.Builder(audio ? Track.AUDIO : Track.VIDEO)
                 .setId(audio ? "rtp-audio" : "rtp-video")
-                .setFormat(audio ? "mpeg4-generic" : codec.toLowerCase(Locale.US))
-                .setPayloadType(integer(params, "payload-type", 96))
+                .setFormat(transportStream ? "mp2t" : audio ? "mpeg4-generic" : codec.toLowerCase(Locale.US))
+                .setPayloadType(integer(params, "payload-type", transportStream ? 33 : 96))
                 .setClockRate(integer(params, "clock-rate", audio ? 44100 : 90000))
                 .setChannels(integer(params, "channels", 2))
                 .setMode(params.getOrDefault("mode", "AAC-hbr"));
@@ -64,6 +65,7 @@ public final class RtpTrackConfig {
                             current.builders.put(payload, new Track.Builder(type)
                                     .setId("rtp-" + descriptions.size() + "-" + payload)
                                     .setPayloadType(payload).setTag(descriptions.size()));
+                            if (payload == 33) current.builders.get(payload).setFormat("mp2t").setClockRate(90000);
                         }
                         descriptions.add(current);
                     }
@@ -102,7 +104,8 @@ public final class RtpTrackConfig {
             for (Map.Entry<Integer, Track.Builder> entry : description.builders.entrySet()) {
                 Track.Builder builder = entry.getValue();
                 String format = builder.getFormat();
-                if (!"h264".equals(format) && !"mpeg4-generic".equals(format)) continue;
+                if (!"h264".equals(format) && !"mpeg4-generic".equals(format) && !isTransportStream(format)) continue;
+                if (isTransportStream(format)) builder.setFormat("mp2t");
                 applyFmtp(builder, description.fmtp.getOrDefault(entry.getKey(), new HashMap<>()));
                 Track track = validate(builder);
                 if (tracks.getByPayloadType(track.getPayloadType()) != null) {
@@ -111,7 +114,7 @@ public final class RtpTrackConfig {
                 tracks.put(track);
             }
         }
-        if (tracks.size() == 0) throw new IllegalArgumentException("SDP has no supported H.264/AAC tracks");
+        if (tracks.size() == 0) throw new IllegalArgumentException("SDP has no supported H.264/AAC/MP2T tracks");
         return tracks;
     }
 
@@ -121,7 +124,9 @@ public final class RtpTrackConfig {
             throw new IllegalArgumentException("Invalid or RTCP-mux reserved RTP payload type: " + payload);
         }
         if (track.getClockRate() <= 0) throw new IllegalArgumentException("RTP clock rate must be positive");
-        if (track instanceof AudioTrack) {
+        if (track instanceof RtpTransportStreamTrack) {
+            if (track.getClockRate() != 90000) throw new IllegalArgumentException("MP2T requires a 90000 Hz RTP clock");
+        } else if (track instanceof AudioTrack) {
             AudioTrack audio = (AudioTrack) track;
             if (!"mpeg4-generic".equalsIgnoreCase(track.getFormat())
                     && !"aac".equalsIgnoreCase(track.getFormat())) {
@@ -161,10 +166,26 @@ public final class RtpTrackConfig {
 
     private static Track validate(Track.Builder builder) {
         if (builder.getClockRate() <= 0) throw new IllegalArgumentException("Missing RTP clock rate");
-        Track track = builder.build();
+        Track track;
+        if ("mp2t".equals(builder.getFormat())) {
+            track = new RtpTransportStreamTrack(builder.getPayloadType());
+            track.setClockRate(builder.getClockRate());
+            for (Map.Entry<String, Object> entry : builder.getMetadata().entrySet()) track.setMetadata(entry.getKey(), entry.getValue());
+        } else track = builder.build();
         if (track == null) throw new IllegalArgumentException("Invalid RTP track");
         validateTrack(track);
         return track;
+    }
+
+    static boolean isAutoDetectUri(URI uri) {
+        Map<String, String> params = query(uri);
+        return !params.containsKey("codec") && !params.containsKey("payload-type") && !params.containsKey("sdp");
+    }
+
+    private static boolean isTransportStream(String codec) {
+        return "mp2t".equalsIgnoreCase(codec) || "mpegts".equalsIgnoreCase(codec)
+                || "mpeg-ts".equalsIgnoreCase(codec) || "ts".equalsIgnoreCase(codec)
+                || "video/mp2t".equalsIgnoreCase(codec);
     }
 
     private static void validateIntegerParameter(Track track, String key, int minimum, int maximum) {

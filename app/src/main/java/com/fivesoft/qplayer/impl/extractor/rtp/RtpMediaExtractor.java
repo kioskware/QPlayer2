@@ -45,9 +45,13 @@ public class RtpMediaExtractor extends MediaExtractor {
         @Nullable
         @Override
         public MediaExtractor create(Descriptor descriptor) {
-            return accept(descriptor) > 0 ? new RtpMediaExtractor(
-                    (DatagramDataSource) descriptor.dataSource, descriptor.trackSelector,
-                    RtpTrackConfig.fromUri(descriptor.uri)) : null;
+            if (accept(descriptor) <= 0) return null;
+            Tracks tracks = RtpTrackConfig.fromUri(descriptor.uri);
+            boolean transportStream = RtpTrackConfig.isAutoDetectUri(descriptor.uri);
+            for (Track track : tracks) transportStream |= track instanceof RtpTransportStreamTrack;
+            return transportStream ? new RtpStreamMediaExtractor((DatagramDataSource) descriptor.dataSource,
+                    descriptor.trackSelector, descriptor.uri) : new RtpMediaExtractor(
+                    (DatagramDataSource) descriptor.dataSource, descriptor.trackSelector, tracks);
         }
     };
 
