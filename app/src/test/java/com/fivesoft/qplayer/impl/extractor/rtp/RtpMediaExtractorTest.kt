@@ -88,6 +88,42 @@ class RtpMediaExtractorTest {
     }
 
     @Test
+    fun recoversFromSenderRestartWithTheSameSsrc() {
+        val source = Packets()
+        val extractor = extractor(source)
+        source.add(rtp(10000, 90000))
+        extractor.nextSample()
+        source.add(rtp(1, 0))
+        source.add(rtp(2, 9000))
+        val restarted = extractor.nextSample() as RtpSample
+        assertEquals(2, restarted.sequenceNumber)
+        assertTrue(restarted.discontinuity)
+        source.add(rtp(3, 99000))
+        assertEquals(1000L, extractor.nextSample()!!.timestamp)
+    }
+
+    @Test
+    fun senderReportsSynchronizeTracksWithDifferentClocks() {
+        val tracks = RtpTrackConfig.fromSdp("m=video 5004 RTP/AVP 96\na=rtpmap:96 H264/90000\n" +
+            "m=audio 5004 RTP/AVP 97\na=rtpmap:97 MPEG4-GENERIC/48000/2\na=fmtp:97 config=1190")
+        val source = Packets()
+        val extractor = RtpMediaExtractor(source, null, tracks)
+        extractor.prepare(1000)
+        fun report(ssrc: Int, timestamp: Int) = ByteBuffer.allocate(28)
+            .put(0x80.toByte()).put(200.toByte()).putShort(6)
+            .putInt(ssrc).putInt(100).putInt(0).putInt(timestamp).putInt(1).putInt(1).array()
+        source.add(report(1, 90000))
+        source.add(report(2, 48000))
+        source.add(rtp(1, 90000, ssrc = 1))
+        source.add(rtp(1, 72000, ssrc = 2, payloadType = 97))
+        assertEquals(0L, extractor.nextSample()!!.timestamp)
+        assertEquals(500L, extractor.nextSample()!!.timestamp)
+        assertTrue(source.feedback.any { (it[1].toInt() and 255) == 201 })
+        extractor.close()
+        assertEquals(203, source.feedback.last()[1].toInt() and 255)
+    }
+
+    @Test
     fun selectedTrackUsesItsOwnClockAndBuffersAreNotOverwritten() {
         val tracks = RtpTrackConfig.fromSdp("m=video 5004 RTP/AVP 96\na=rtpmap:96 H264/90000\n" +
             "m=audio 5004 RTP/AVP 97\na=rtpmap:97 MPEG4-GENERIC/48000/2\na=fmtp:97 config=1190")
@@ -185,6 +221,7 @@ class RtpMediaExtractorTest {
 
     private class Packets : DatagramDataSource() {
         private val packets = ArrayDeque<ByteArray>()
+        val feedback = mutableListOf<ByteArray>()
         fun add(packet: ByteArray) { packets.add(packet) }
         override fun readDatagram(buffer: ByteArray, offset: Int, length: Int, timeout: Int): Int {
             val packet = packets.poll() ?: throw SocketTimeoutException()
@@ -199,5 +236,9 @@ class RtpMediaExtractorTest {
         override fun getOutputStream() = null
         override fun onTimeoutSet(timeout: Int) {}
         override fun close() {}
+        override fun sendControlDatagram(data: ByteArray): Boolean {
+            feedback.add(data)
+            return true
+        }
     }
 }

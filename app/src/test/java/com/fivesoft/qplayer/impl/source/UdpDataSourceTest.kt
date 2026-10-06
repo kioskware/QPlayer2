@@ -9,6 +9,10 @@ import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.SocketTimeoutException
 import java.net.URI
+import java.net.NetworkInterface
+import java.net.Inet4Address
+import java.net.MulticastSocket
+import org.junit.Assume.assumeNotNull
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
@@ -96,6 +100,29 @@ class UdpDataSourceTest {
                 assertTrue(finished.await(2, TimeUnit.SECONDS))
                 if (interrupt) assertTrue(error.get() is InterruptedIOException)
                 else assertTrue(error.get() is IOException || error.get() is IllegalStateException)
+            }
+        }
+    }
+
+    @Test
+    fun joinsMulticastGroupOnAnExplicitInterface() {
+        val network = NetworkInterface.getNetworkInterfaces().toList().firstOrNull {
+            it.isUp && it.supportsMulticast() && it.inetAddresses.toList().any { address -> address is Inet4Address }
+        }
+        assumeNotNull(network)
+        MulticastSocketDataSource("239.255.42.42", 0).use { source ->
+            source.setNetworkInterface(network)
+            source.connect()
+            assertTrue(source.isConnected)
+            MulticastSocket().use { sender ->
+                sender.networkInterface = network
+                sender.loopbackMode = false
+                val data = byteArrayOf(1, 2, 3, 4)
+                sender.send(DatagramPacket(data, data.size, InetAddress.getByName("239.255.42.42"), source.localPort))
+                val buffer = ByteArray(100)
+                assertEquals(4, source.readDatagram(buffer, 0, 100, 1500))
+                assertArrayEquals(data, buffer.copyOf(4))
+                assertEquals(source.localPort, source.multicastDestination!!.port)
             }
         }
     }
