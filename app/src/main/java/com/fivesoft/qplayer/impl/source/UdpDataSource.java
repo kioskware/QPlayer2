@@ -48,6 +48,7 @@ public class UdpDataSource extends DatagramDataSource {
     private volatile MulticastSocket socket;
     private volatile InputStream inputStream;
     private NetworkInterface networkInterface;
+    private volatile InetSocketAddress lastSender;
 
     public UdpDataSource(@NonNull String host, int port) {
         this.host = Objects.requireNonNull(host);
@@ -98,6 +99,7 @@ public class UdpDataSource extends DatagramDataSource {
                     opened.joinGroup(new InetSocketAddress(address, port), networkInterface);
                 }
                 socket = opened;
+                lastSender = null;
                 inputStream = new DatagramInputStream(opened);
             } catch (IOException | RuntimeException error) {
                 opened.close();
@@ -154,6 +156,7 @@ public class UdpDataSource extends DatagramDataSource {
                         : INTERRUPT_POLL_MS);
                 try {
                     current.receive(packet);
+                    lastSender = (InetSocketAddress) packet.getSocketAddress();
                     if (packet.getLength() > length) {
                         throw new IOException("UDP datagram exceeds the supplied buffer");
                     }
@@ -169,6 +172,26 @@ public class UdpDataSource extends DatagramDataSource {
     @Override
     public boolean isOutSupported() {
         return false;
+    }
+
+    @Nullable
+    public InetSocketAddress getLastSenderAddress() {
+        return lastSender;
+    }
+
+    /** Sends a datagram through the receiving socket, preserving the local port. */
+    public boolean sendDatagram(@NonNull byte[] data, @Nullable InetSocketAddress destination)
+            throws IOException {
+        MulticastSocket current = socket;
+        if (current == null || current.isClosed()) throw new IllegalStateException("Not connected");
+        if (destination == null) return false;
+        current.send(new DatagramPacket(data, data.length, destination));
+        return true;
+    }
+
+    @Override
+    public boolean sendControlDatagram(@NonNull byte[] data) throws IOException {
+        return sendDatagram(data, lastSender);
     }
 
     @Nullable

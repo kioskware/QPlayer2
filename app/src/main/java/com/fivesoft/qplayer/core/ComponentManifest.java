@@ -16,6 +16,7 @@ import com.fivesoft.qplayer.impl.extractor.rtp.RtpMediaExtractor;
 import com.fivesoft.qplayer.impl.source.FileDataSource;
 import com.fivesoft.qplayer.impl.source.SocketDataSource;
 import com.fivesoft.qplayer.impl.source.UdpDataSource;
+import com.fivesoft.qplayer.impl.source.RtpDataSource;
 
 /**
  * This class is used to register all components of the api like:
@@ -48,6 +49,7 @@ public class ComponentManifest {
         DataSourceResolver.getInstance()
                 .registerCreator(SocketDataSource.CREATOR)
                 .registerCreator(UdpDataSource.CREATOR)
+                .registerCreator(RtpDataSource.CREATOR)
                 .registerCreator(FileDataSource.CREATOR);
 
         //Register extractors

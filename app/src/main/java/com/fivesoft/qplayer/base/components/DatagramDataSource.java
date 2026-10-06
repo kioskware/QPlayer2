@@ -20,4 +20,9 @@ public abstract class DatagramDataSource extends DataSource {
      */
     public abstract int readDatagram(@NonNull byte[] buffer, int offset, int length,
                                      int timeout) throws IOException;
+
+    /** Sends protocol feedback to the current sender, if the transport supports it. */
+    public boolean sendControlDatagram(@NonNull byte[] data) throws IOException {
+        return false;
+    }
 }
