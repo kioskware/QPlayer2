@@ -2,7 +2,21 @@ package com.fivesoft.qplayer.impl.extractor.ts
 
 import com.fivesoft.qplayer.base.Frame
 import com.fivesoft.qplayer.common.TrackSelector
-import com.fivesoft.qplayer.impl.extractor.ts.TsTestData.*
+import com.fivesoft.qplayer.impl.extractor.ts.TsTestData.AUDIO
+import com.fivesoft.qplayer.impl.extractor.ts.TsTestData.PMT
+import com.fivesoft.qplayer.impl.extractor.ts.TsTestData.VIDEO
+import com.fivesoft.qplayer.impl.extractor.ts.TsTestData.adts
+import com.fivesoft.qplayer.impl.extractor.ts.TsTestData.annexB
+import com.fivesoft.qplayer.impl.extractor.ts.TsTestData.idr
+import com.fivesoft.qplayer.impl.extractor.ts.TsTestData.media
+import com.fivesoft.qplayer.impl.extractor.ts.TsTestData.packet
+import com.fivesoft.qplayer.impl.extractor.ts.TsTestData.packetize
+import com.fivesoft.qplayer.impl.extractor.ts.TsTestData.pat
+import com.fivesoft.qplayer.impl.extractor.ts.TsTestData.pes
+import com.fivesoft.qplayer.impl.extractor.ts.TsTestData.pmt
+import com.fivesoft.qplayer.impl.extractor.ts.TsTestData.pps
+import com.fivesoft.qplayer.impl.extractor.ts.TsTestData.sps
+import com.fivesoft.qplayer.impl.extractor.ts.TsTestData.tables
 import org.junit.Assert.*
 import org.junit.Test
 
