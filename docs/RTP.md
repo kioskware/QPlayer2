@@ -1,11 +1,12 @@
-# Direct RTP streams
+# RTP streams
 
 QPlayer receives RTP over UDP through its existing component pipeline:
 
 ```text
 URI -> DataSourceResolver -> RtpDataSource / UdpDataSource
-    -> MediaExtractorResolver -> RtpMediaExtractor
-    -> FORMAT_RTP -> H264Decoder / AACDecoder
+    -> MediaExtractorResolver -> RtpMediaExtractor / RtpStreamMediaExtractor
+    -> elementary RTP: FORMAT_RTP -> H264Decoder / AACDecoder
+    -> MP2T: TsDemuxer -> FORMAT_RAW -> H264Decoder / AACDecoder
 ```
 
 The sources and extractor are registered in `ComponentManifest`. The public player,
@@ -21,6 +22,9 @@ view.setPlayback(true);
 // Join the multicast group on the RTP/RTCP port pair.
 view.setMediaSource("rtp://239.10.10.10:5004");
 
+// MPEG-TS over RTP, e.g. a Magewell encoder sending MP2T payload type 33.
+view.setMediaSource("rtp://239.1.1.1:1234");
+
 // MPEG4-GENERIC AAC-LC, stereo, 48 kHz; receive RTP/RTCP on 5006/5007.
 view.setMediaSource("rtp://0.0.0.0:5006?codec=aac&payload-type=97"
         + "&clock-rate=48000&channels=2&mode=AAC-hbr&config=1190");
@@ -34,17 +38,23 @@ wildcard address and waits for the sender; opening a URI does not ask a server t
 start sending. For multicast, the URI host identifies the group to join.
 An explicit nonzero port is required by the source resolver.
 
+Without explicit codec configuration, the resolver detects H.264 on payload type
+96 or MPEG-TS (MP2T) on its standard payload type 33. `prepare()` receives the
+initial RTP packet and, for TS, waits for PAT/PMT before exposing elementary
+tracks and the decoder sample format. Samples received during preparation are retained.
+
 `udp://host:port` also selects the RTP extractor, with one socket and RTCP mux.
-It expects RTP packets, not an arbitrary UDP byte stream or MPEG-TS datagrams.
+It expects RTP packets, including MP2T, rather than raw TS-over-UDP datagrams.
 `rtsp://` continues to use the existing RTSP/TCP transport and session setup.
 
 ## URI parameters
 
 | Parameter | Default | Purpose |
 | --- | --- | --- |
-| `codec` | `h264` | `h264`, `aac`, or `mpeg4-generic` |
-| `payload-type` | `96` | RTP payload type; match the sender's mapping |
-| `clock-rate` | `90000` for H.264, `44100` for AAC | Timestamp clock in Hz |
+| `codec` | Auto-detect H.264/MP2T | `h264`, `aac`, `mpeg4-generic`, or `mp2t` (`mpegts`, `mpeg-ts`, `ts` aliases) |
+| `payload-type` | `96` for H.264/AAC, `33` for MP2T | RTP payload type; match the sender's mapping; explicit `33` implies MP2T when no codec is specified |
+| `clock-rate` | `90000` for H.264/MP2T, `44100` for AAC | Timestamp clock in Hz; MP2T requires 90000 |
+| `program` | First program in PAT | MPEG-TS program number (1–65535); `0` selects automatically |
 | `channels` | `2` | AAC output channel count |
 | `mode` | `AAC-hbr` | AAC RTP mode: `AAC-hbr` or `AAC-lbr` |
 | `config` | Required for AAC | Hexadecimal AudioSpecificConfig, e.g. `1210` for AAC-LC stereo 44.1 kHz |
@@ -64,6 +74,11 @@ URL-encode parameter values, particularly SDP, `+` in Base64, and characters
 such as `&` or `=` inside values. Unsupported codecs, ambiguous payload mappings,
 invalid clocks and unsupported AAC layouts fail explicitly during configuration.
 Payload types 64–95 are reserved here to distinguish RTP from multiplexed RTCP.
+
+For a dynamic MP2T mapping, specify `?codec=mp2t&payload-type=98` or supply an
+SDP with `a=rtpmap:98 MP2T/90000`. Static SDP payload type 33 needs no `rtpmap`.
+TS programs supply their own H.264/AAC configuration in-band; the URI AAC
+parameters above apply to elementary MPEG4-GENERIC RTP only.
 
 ## SDP and custom transports
 
@@ -104,6 +119,16 @@ existing `TrackSelector` API. Custom datagram transports extend
 The ordinary `InputStream` remains available, but RTP extraction uses datagrams.
 Avoid mixing both reading APIs on the same source.
 
+For automatic detection or TS component use, construct
+`new RtpStreamMediaExtractor(source, selector, uri)` instead. It composes the RTP
+transport extractor with `TsDemuxer`; it returns H.264 Annex B NAL frames and raw
+AAC access units as `FORMAT_RAW` for MP2T. `RtpMediaExtractor` remains the
+transport-level API for elementary RTP payloads and packet metadata.
+
+`TrackSelector` applies to the video/audio tracks discovered inside TS. PAT and
+PMT are always read. Unsupported TS stream types are ignored; preparation fails
+with an I/O error if the selected program has no supported selected tracks.
+
 One source receives one RTP session/port pair. Several distinct payload types can
 share that source. SDP media connection addresses and ports describe the session;
 they do not open additional sockets. For separate media ports, create a source
@@ -139,6 +164,12 @@ now delegate to the working UDP implementation.
   inconsistent fragments are discarded; frame size limits apply to every path.
 - MPEG4-GENERIC AAC HBR/LBR: one or several access units per packet, per-unit
   timestamps, fragmented access units, explicit header lengths and sample offsets.
+- MPEG-TS over RTP (MP2T): 188-byte transport packets, PAT/PMT discovery and
+  version updates, program selection, PSI CRC validation, adaptation fields,
+  continuity checks and incremental PES reassembly. H.264 Annex B and AAC ADTS
+  are demultiplexed into the existing raw decoder pipeline, with SPS/PPS and AAC
+  AudioSpecificConfig, ADTS header removal, common PTS timing and 33-bit wrap.
+  Packet loss discards partial PES/NAL/AAC data; new SSRCs rediscover program tables.
 - Separate RTP/RTCP ports and RTCP mux; compound RTCP parsing, sender reports,
   shared NTP timing between tracks, receiver reports with loss/jitter/LSR/DLSR,
   SDES CNAME and BYE. Feedback returns to the control sender or multicast group.
@@ -146,12 +177,16 @@ now delegate to the working UDP implementation.
 
 The codec scope follows QPlayer's existing H.264 and AAC decoders. H.264
 interleaved mode 2, AAC interleaving/auxiliary/CTS/DTS header extensions, LATM,
-SRTP, H.265, MPEG-TS and retransmission/FEC payload formats are unsupported.
+SRTP, H.265 and retransmission/FEC payload formats are unsupported. TS supports
+H.264 and single-block AAC ADTS with an explicit channel configuration; other TS
+codecs, LATM, 192/204-byte transport packets and raw TS over UDP are unsupported.
 The extractor uses millisecond sample timestamps, following the library's convention.
 
 The implementation follows [RTP/RTCP (RFC 3550)](https://www.rfc-editor.org/rfc/rfc3550),
 [H.264 RTP payloads (RFC 6184)](https://www.rfc-editor.org/rfc/rfc6184),
-[MPEG4-GENERIC payloads (RFC 3640)](https://www.rfc-editor.org/rfc/rfc3640), and
+[MPEG4-GENERIC payloads (RFC 3640)](https://www.rfc-editor.org/rfc/rfc3640),
+[MPEG-TS RTP payloads (RFC 2250)](https://www.rfc-editor.org/rfc/rfc2250),
+[static MP2T mapping (RFC 3551)](https://www.rfc-editor.org/rfc/rfc3551), and
 [SDP (RFC 8866)](https://www.rfc-editor.org/rfc/rfc8866) within this codec scope.
 
 ## Verification
@@ -161,3 +196,7 @@ Tests cover malformed datagrams, reordering, packet loss, wraparound, restarts,
 codec aggregation/fragmentation, RTCP reports, port pairs and feedback. UDP,
 RTCP and multicast integration tests use real local network sockets; the multicast
 test is skipped only when no suitable multicast interface exists.
+TS tests cover program tables, fragmented PES/ADTS/NALs, PTS wrap and audio/video
+offsets, continuity loss, source changes, dynamic/static MP2T configuration and
+RTP → TS → raw decoder-frame delivery over real sockets. Live playback against
+an external encoder additionally requires multicast reachability on the host/device.
