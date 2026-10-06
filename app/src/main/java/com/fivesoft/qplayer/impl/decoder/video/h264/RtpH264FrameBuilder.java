@@ -67,7 +67,8 @@ public class RtpH264FrameBuilder extends FrameBuilder {
         int type = flags & 0x1f;
         boolean start = (flags & 0x80) != 0;
         boolean end = (flags & 0x40) != 0;
-        if ((flags & 0x20) != 0 || (start && end) || type < 1 || type > 23) {
+        // RFC 6184 requires receivers to ignore the reserved FU header bit.
+        if ((start && end) || type < 1 || type > 23) {
             clear();
             return null;
         }
