@@ -11,7 +11,11 @@ import java.net.SocketTimeoutException
 import java.net.URI
 import java.net.NetworkInterface
 import java.net.Inet4Address
-import java.net.MulticastSocket
+import java.net.StandardProtocolFamily
+import java.net.StandardSocketOptions
+import java.net.InetSocketAddress
+import java.nio.ByteBuffer
+import java.nio.channels.DatagramChannel
 import org.junit.Assume.assumeNotNull
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -114,11 +118,11 @@ class UdpDataSourceTest {
             source.setNetworkInterface(network)
             source.connect()
             assertTrue(source.isConnected)
-            MulticastSocket().use { sender ->
-                sender.networkInterface = network
-                sender.loopbackMode = false
+            DatagramChannel.open(StandardProtocolFamily.INET).use { sender ->
+                sender.setOption(StandardSocketOptions.IP_MULTICAST_IF, network)
+                sender.setOption(StandardSocketOptions.IP_MULTICAST_LOOP, true)
                 val data = byteArrayOf(1, 2, 3, 4)
-                sender.send(DatagramPacket(data, data.size, InetAddress.getByName("239.255.42.42"), source.localPort))
+                sender.send(ByteBuffer.wrap(data), InetSocketAddress("239.255.42.42", source.localPort))
                 val buffer = ByteArray(100)
                 assertEquals(4, source.readDatagram(buffer, 0, 100, 1500))
                 assertArrayEquals(data, buffer.copyOf(4))

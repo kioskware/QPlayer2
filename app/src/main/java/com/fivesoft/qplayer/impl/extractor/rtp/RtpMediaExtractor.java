@@ -108,7 +108,7 @@ public class RtpMediaExtractor extends MediaExtractor {
         streams.clear();
         senderReports.clear();
         ntpOriginMs = -1;
-        lastReportAt = 0;
+        lastReportAt = System.nanoTime() - TimeUnit.MILLISECONDS.toNanos(rtcpReportIntervalMs);
         for (Track track : tracks) {
             RtpTrackConfig.validateTrack(track);
             if (streams.containsKey(track.getPayloadType())) {
@@ -220,7 +220,7 @@ public class RtpMediaExtractor extends MediaExtractor {
             SenderReport report = senderReports.get(stream.ssrc);
             if (report != null) {
                 block.lastSenderReport = report.report.compactNtpTimestamp;
-                block.delaySinceReport = (now - report.receivedAt) * 65536L / 1_000_000_000L;
+                block.delaySinceReport = TimeUnit.NANOSECONDS.toMillis(now - report.receivedAt) * 65536L / 1000;
             }
             stream.previousExpected = expected;
             stream.previousReceived = stream.receivedPackets;
@@ -308,6 +308,11 @@ public class RtpMediaExtractor extends MediaExtractor {
                 if (ssrc != -1) retire(ssrc);
                 reset(packet.header.sequenceNumber);
                 ssrc = source;
+                SenderReport report = senderReports.get(source);
+                if (report != null) {
+                    track.setMetadata("rtcp-ntp-timestamp-ms", report.report.ntpTimestampMs);
+                    track.setMetadata("rtcp-rtp-timestamp", report.report.rtpTimestamp);
+                }
             }
             int distance = (packet.header.sequenceNumber - (int) nextSequence) & 0xffff;
             if (distance > 3000 && distance < 65536 - 100) {

@@ -17,6 +17,7 @@ import java.net.InetSocketAddress;
 import java.net.MulticastSocket;
 import java.net.NetworkInterface;
 import java.net.SocketTimeoutException;
+import java.net.SocketException;
 import java.net.URI;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
@@ -251,6 +252,7 @@ public class UdpDataSource extends DatagramDataSource {
             if (offset < 0 || length < 0 || offset > target.length - length) {
                 throw new IndexOutOfBoundsException();
             }
+            if (streamSocket.isClosed()) throw new SocketException("UDP stream is closed");
             if (length == 0) {
                 return 0;
             }
