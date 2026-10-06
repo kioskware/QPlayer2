@@ -1,50 +1,38 @@
 package com.fivesoft.qplayer.impl.decoder.audio.aac;
 
-import android.util.Log;
-
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import com.fivesoft.qplayer.base.Frame;
 import com.fivesoft.qplayer.base.Sample;
-import com.fivesoft.qplayer.common.X;
+import com.fivesoft.qplayer.base.track.Track;
 import com.fivesoft.qplayer.core.FrameBuilder;
+import com.fivesoft.qplayer.impl.extractor.rtp.RtpSample;
 
-// https://tools.ietf.org/html/rfc3640
-//          +---------+-----------+-----------+---------------+
-//         | RTP     | AU Header | Auxiliary | Access Unit   |
-//         | Header  | Section   | Section   | Data Section  |
-//         +---------+-----------+-----------+---------------+
-//
-//                   <----------RTP Packet Payload----------->
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 
+/** RFC 3640 MPEG4-GENERIC AAC-hbr/AAC-lbr access-unit aggregation and fragmentation. */
 public class RtpAACFrameBuilder extends FrameBuilder {
-
     public static final int DEFAULT_MAX_FRAME_SIZE = 8191;
-
-    private final ParsableBitArray headerScratchBits;
-    private final ParsableByteArray headerScratchBytes;
-
-    private static final int MODE_LBR = 0;
-    private static final int MODE_HBR = 1;
-
-    // Number of bits for AAC AU sizes, indexed by mode (LBR and HBR)
-    private static final int[] NUM_BITS_AU_SIZES = {6, 13};
-
-    // Number of bits for AAC AU index(-delta), indexed by mode (LBR and HBR)
-    private static final int[] NUM_BITS_AU_INDEX = {2, 3};
-
-    // Frame Sizes for AAC AU fragments, indexed by mode (LBR and HBR)
-    private static final int[] FRAME_SIZES = {63, 8191};
-
-    private final int _aacMode;
-    private boolean completeFrameIndicator = true;
+    private final int defaultSizeBits;
+    private final int defaultIndexBits;
+    private byte[] fragment;
+    private int fragmentLength;
+    private long fragmentRtpTimestamp;
+    private long fragmentTimestamp;
+    private Track fragmentTrack;
+    private int lastSequence = -1;
 
     public RtpAACFrameBuilder(int maxFrameSize, @NonNull String aacMode) {
         super(maxFrameSize);
-        _aacMode = aacMode.equalsIgnoreCase("AAC-lbr") ? MODE_LBR : MODE_HBR;
-        headerScratchBits = new ParsableBitArray();
-        headerScratchBytes = new ParsableByteArray();
+        if (maxFrameSize <= 0) throw new IllegalArgumentException("Frame size must be positive");
+        if (!"AAC-lbr".equalsIgnoreCase(aacMode) && !"AAC-hbr".equalsIgnoreCase(aacMode)) {
+            throw new IllegalArgumentException("Unsupported AAC RTP mode: " + aacMode);
+        }
+        defaultSizeBits = "AAC-lbr".equalsIgnoreCase(aacMode) ? 6 : 13;
+        defaultIndexBits = "AAC-lbr".equalsIgnoreCase(aacMode) ? 2 : 3;
     }
 
     public RtpAACFrameBuilder(@NonNull String aacMode) {
@@ -54,95 +42,126 @@ public class RtpAACFrameBuilder extends FrameBuilder {
     @Nullable
     @Override
     public Frame[] pull(@NonNull Sample sample) throws BufferOverflowException {
-        byte[] data = processRtpPacketAndGetSample(
-                sample.getArray(),
-                sample.getLength(),
-                sample.getOffset());
-
-        if (data == null) {
-            return null;
+        if (sample instanceof RtpSample && ((RtpSample) sample).discontinuity) clear();
+        int sizeBits = parameter(sample, "sizelength", "sizeLength", defaultSizeBits);
+        int indexBits = parameter(sample, "indexlength", "indexLength", defaultIndexBits);
+        int deltaBits = parameter(sample, "indexdeltalength", "indexDeltaLength", defaultIndexBits);
+        AccessUnits units = parseHeaders(sample.getArray(), sample.getOffset(), sample.getLength(),
+                sizeBits, indexBits, deltaBits);
+        if (units == null) { clear(); return null; }
+        for (int size : units.sizes) {
+            if (size > maxFrameSize) { clear(); throw new BufferOverflowException(); }
         }
-
-        return new Frame[]{
-                new Frame(data, 0, data.length, sample.getTimestamp(), sample.getTrack(), Frame.SYNC_FRAME)
-        };
+        int payloadSize = sample.getOffset() + sample.getLength() - units.payloadOffset;
+        long rtpTimestamp = sample instanceof RtpSample
+                ? ((RtpSample) sample).rtpTimestamp : sample.getTimestamp();
+        int sequence = sample instanceof RtpSample ? ((RtpSample) sample).sequenceNumber : -1;
+        if (fragment != null && (units.sizes.size() != 1 || fragment.length != units.sizes.get(0)
+                || fragmentRtpTimestamp != rtpTimestamp || sample.getTrack() != fragmentTrack
+                || (sequence != -1 && lastSequence != -1 && sequence != ((lastSequence + 1) & 0xffff)))) {
+            clear();
+        }
+        if (units.sizes.size() == 1 && (fragment != null || payloadSize < units.sizes.get(0))) {
+            int size = units.sizes.get(0);
+            if (fragment == null) {
+                if (payloadSize == 0 || (sample instanceof RtpSample && ((RtpSample) sample).marker)) return null;
+                fragment = new byte[size];
+                fragmentRtpTimestamp = rtpTimestamp;
+                fragmentTimestamp = sample.getTimestamp();
+                fragmentTrack = sample.getTrack();
+            }
+            if (payloadSize > size - fragmentLength) { clear(); return null; }
+            System.arraycopy(sample.getArray(), units.payloadOffset, fragment, fragmentLength, payloadSize);
+            fragmentLength += payloadSize;
+            lastSequence = sequence;
+            if (fragmentLength != size) {
+                if (sample instanceof RtpSample && ((RtpSample) sample).marker) clear();
+                return null;
+            }
+            Frame frame = new Frame(fragment, fragmentTimestamp, fragmentTrack, Frame.SYNC_FRAME);
+            clear();
+            return new Frame[]{frame};
+        }
+        clear();
+        long totalSize = 0;
+        for (int size : units.sizes) totalSize += size;
+        if (totalSize != payloadSize) return null;
+        int duration = parameter(sample, "constantduration", "constantDuration", 1024);
+        if (duration <= 0 || sample.getTrack().getClockRate() <= 0) return null;
+        Frame[] frames = new Frame[units.sizes.size()];
+        int position = units.payloadOffset;
+        long index = 0;
+        for (int i = 0; i < frames.length; i++) {
+            int size = units.sizes.get(i);
+            if (i > 0) index += (long) units.indices.get(i) + 1;
+            byte[] data = Arrays.copyOfRange(sample.getArray(), position, position + size);
+            long timestamp = sample.getTimestamp() + index * duration * 1000 / sample.getTrack().getClockRate();
+            frames[i] = new Frame(data, timestamp, sample.getTrack(), Frame.SYNC_FRAME);
+            position += size;
+        }
+        return frames;
     }
 
     @Override
-    public int getBufferSize() {
-        return 0;
-    }
+    public int getBufferSize() { return fragmentLength; }
 
     @Override
     public void clear() {
+        fragment = null;
+        fragmentLength = 0;
+        fragmentTrack = null;
+        lastSequence = -1;
+    }
 
+    /** Compatibility helper for a packet containing one complete access unit. */
+    @Nullable
+    public byte[] processRtpPacketAndGetSample(@NonNull byte[] data, int length, int off) {
+        AccessUnits units = parseHeaders(data, off, length, defaultSizeBits, defaultIndexBits, defaultIndexBits);
+        if (units == null || units.sizes.size() != 1
+                || units.sizes.get(0) != off + length - units.payloadOffset) return null;
+        return Arrays.copyOfRange(data, units.payloadOffset, off + length);
+    }
+
+    private static int parameter(Sample sample, String key, String legacyKey, int fallback) {
+        Object value = sample.getTrack().getMetadata(key);
+        if (value == null) value = sample.getTrack().getMetadata(legacyKey);
+        if (value == null) return fallback;
+        try { return Integer.parseInt(value.toString()); }
+        catch (NumberFormatException invalid) { return -1; }
     }
 
     @Nullable
-    public byte[] processRtpPacketAndGetSample(@NonNull byte[] data, int length, int off) {
-        int auHeadersCount = 1;
-        int numBitsAuSize = NUM_BITS_AU_SIZES[_aacMode];
-        int numBitsAuIndex = NUM_BITS_AU_INDEX[_aacMode];
-
-        ParsableByteArray packet = new ParsableByteArray(data, length);
-
-//      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+- .. -+-+-+-+-+-+-+-+-+-+
-//      |AU-headers-length|AU-header|AU-header|      |AU-header|padding|
-//      |                 |   (1)   |   (2)   |      |   (n)   | bits  |
-//      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+- .. -+-+-+-+-+-+-+-+-+-+
-        int auHeadersLength = packet.readShort();//((data[0] & 0xFF) << 8) | (data[1] & 0xFF);
-        int auHeadersLengthBytes = (auHeadersLength + 7) / 8;
-
-        headerScratchBytes.reset(auHeadersLengthBytes);
-        packet.readBytes(headerScratchBytes.getData(), 0, auHeadersLengthBytes);
-        headerScratchBits.reset(headerScratchBytes.getData());
-
-        int bitsAvailable = auHeadersLength - (numBitsAuSize + numBitsAuIndex);
-
-        if (bitsAvailable > 0) {// && (numBitsAuSize + numBitsAuSize) > 0) {
-            auHeadersCount +=  bitsAvailable / (numBitsAuSize + numBitsAuIndex);
+    private static AccessUnits parseHeaders(byte[] data, int offset, int length,
+                                           int sizeBits, int indexBits, int deltaBits) {
+        if (offset < 0 || length < 2 || offset > data.length - length
+                || sizeBits < 1 || sizeBits > 31 || indexBits < 0 || indexBits > 31
+                || deltaBits < 0 || deltaBits > 31) return null;
+        int headerBits = ((data[offset] & 0xff) << 8) | (data[offset + 1] & 0xff);
+        int headerBytes = (headerBits + 7) / 8;
+        if (headerBits < sizeBits + indexBits || headerBytes > length - 2) return null;
+        int firstBits = sizeBits + indexBits;
+        int remaining = headerBits - firstBits;
+        if (remaining % (sizeBits + deltaBits) != 0) return null;
+        int count = 1 + remaining / (sizeBits + deltaBits);
+        ParsableBitArray bits = new ParsableBitArray(data, offset + 2 + headerBytes);
+        bits.setPosition((offset + 2) * 8);
+        AccessUnits result = new AccessUnits(offset + 2 + headerBytes);
+        for (int i = 0; i < count; i++) {
+            int size = bits.readBits(sizeBits);
+            if (size <= 0) return null;
+            result.sizes.add(size);
+            result.indices.add(bits.readBits(i == 0 ? indexBits : deltaBits));
         }
-
-        if (auHeadersCount == 1) {
-            int auSize = headerScratchBits.readBits(numBitsAuSize);
-            int auIndex = headerScratchBits.readBits(numBitsAuIndex);
-
-            if (completeFrameIndicator) {
-                if (auIndex == 0) {
-                    if (packet.bytesLeft() == auSize) {
-                        return handleSingleAacFrame(packet);
-
-                    } else {
-//                        handleFragmentationAacFrame(packet, auSize);
-                    }
-                }
-            } else {
-//                handleFragmentationAacFrame(packet, auSize);
-            }
-
-        } else {
-            if (completeFrameIndicator) {
-//                handleMultipleAacFrames(packet, auHeadersLength);
-            }
-        }
-//        byte[] auHeader = new byte[length-2-auHeadersLengthBytes];
-//        System.arraycopy(data,2-auHeadersLengthBytes, auHeader,0, auHeader.length);
-//        if (DEBUG)
-//            Log.d(TAG, "AU headers size: " + auHeadersLengthBytes + ", AU headers: " + auHeadersCount + ", sample length: " + auHeader.length);
-//        return auHeader;
-        return new byte[0];
+        return result;
     }
 
-    private byte[] handleSingleAacFrame(ParsableByteArray packet) {
-        int length = packet.bytesLeft();
-        byte[] data = new byte[length];
-        System.arraycopy(packet.getData(), packet.getPosition(), data,0, data.length);
-        return data;
+    private static final class AccessUnits {
+        final int payloadOffset;
+        final List<Integer> sizes = new ArrayList<>();
+        final List<Integer> indices = new ArrayList<>();
+        AccessUnits(int payloadOffset) { this.payloadOffset = payloadOffset; }
     }
 
-    /**
-     * Wraps a byte array, providing methods that allow it to be read as a bitstream.
-     */
     public static final class ParsableBitArray {
 
         public byte[] data;
