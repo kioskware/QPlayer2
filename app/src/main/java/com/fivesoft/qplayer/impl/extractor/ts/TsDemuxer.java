@@ -328,7 +328,7 @@ public final class TsDemuxer {
                 if (headerLength == headerTarget) {
                     int packetLength = unsignedShort(header, 4);
                     remaining = packetLength == 0 ? -1 : packetLength - 3 - (header[8] & 0xff);
-                    if (remaining < -1) { reset(); return; }
+                    if (packetLength != 0 && remaining < 0) { reset(); return; }
                     int ptsFlags = (header[7] >> 6) & 3;
                     if (ptsFlags == 1 || (ptsFlags == 2 && headerTarget < 14)
                             || (ptsFlags == 3 && headerTarget < 19)) { reset(); return; }

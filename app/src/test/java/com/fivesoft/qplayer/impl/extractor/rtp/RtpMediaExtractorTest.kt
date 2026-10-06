@@ -190,7 +190,6 @@ class RtpMediaExtractorTest {
             val resolvedSource = DataSourceResolver.resolveSource(uri)
             assertTrue(resolvedSource is UdpDataSource)
             val extractor = MediaExtractorResolver.resolveExtractor(MediaExtractor.Descriptor(source, null, uri))!!
-            extractor.prepare(1000)
             val builder = RtpH264FrameBuilder()
             DatagramSocket().use { sender ->
                 fun send(sequence: Int, vararg payload: Int) {
@@ -198,6 +197,7 @@ class RtpMediaExtractorTest {
                     sender.send(DatagramPacket(data, data.size, InetAddress.getLoopbackAddress(), source.localPort))
                 }
                 send(10, 0x7c, 0x85, 0x11)
+                extractor.prepare(1000)
                 assertNull(builder.pull(extractor.nextSample()!!))
                 send(12, 0x7c, 0x45, 0x33)
                 send(11, 0x7c, 0x05, 0x22)
