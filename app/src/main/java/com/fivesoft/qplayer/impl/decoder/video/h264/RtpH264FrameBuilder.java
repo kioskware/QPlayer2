@@ -1,46 +1,34 @@
 package com.fivesoft.qplayer.impl.decoder.video.h264;
 
-import android.util.Log;
-
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import com.fivesoft.qplayer.base.Frame;
 import com.fivesoft.qplayer.base.Sample;
+import com.fivesoft.qplayer.base.track.Track;
 import com.fivesoft.qplayer.common.Constants;
 import com.fivesoft.qplayer.core.FrameBuilder;
+import com.fivesoft.qplayer.impl.extractor.rtp.RtpSample;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
+/** RFC 6184 packetization modes 0 and 1: single NAL, STAP-A and FU-A. */
 public class RtpH264FrameBuilder extends FrameBuilder {
+    private final byte[] buffer;
+    private int length;
+    private int fragmentHeader;
+    private long fragmentTimestamp;
+    private long frameTimestamp;
+    private Track fragmentTrack;
+    private int lastSequence = -1;
 
-    private volatile Frame[] resArray = new Frame[1];
-
-    private final byte[] buf;
-    private volatile int off;
-    private volatile int len;
-
-    private volatile byte[] nalUnit;
-    private volatile long currentTimestamp;
-    private volatile byte frameType;
-    private volatile byte currentFragmentNalType = H264Util.NAL_UNIT_TYPE_UNSPECIFIED;
-
-    /**
-     * Creates Frame builder with specified max frame size.<br>
-     *
-     * @param maxFrameSize If a frame is bigger than this value, {@link BufferOverflowException}
-     *                     will be thrown by {@link #pull(Sample sampe)} method.<br>
-     */
     public RtpH264FrameBuilder(int maxFrameSize) {
         super(maxFrameSize);
-        buf = new byte[maxFrameSize];
+        if (maxFrameSize < 5) throw new IllegalArgumentException("Frame size is too small");
+        buffer = new byte[maxFrameSize];
     }
-
-    /**
-     * Creates Frame builder with default max frame size ({@link #DEFAULT_MAX_FRAME_SIZE}).<br>
-     * @see #RtpH264FrameBuilder(int)
-     */
 
     public RtpH264FrameBuilder() {
         this(DEFAULT_MAX_FRAME_SIZE);
@@ -49,283 +37,114 @@ public class RtpH264FrameBuilder extends FrameBuilder {
     @Nullable
     @Override
     public Frame[] pull(@NonNull Sample sample) throws BufferOverflowException {
-
         byte[] data = sample.getArray();
         int offset = sample.getOffset();
-        int length = sample.getLength();
-        if (length == 0) {
+        int size = sample.getLength();
+        if (sample instanceof RtpSample && ((RtpSample) sample).discontinuity) clear();
+        if (size == 0 || (data[offset] & 0x80) != 0) {
+            clear();
             return null;
         }
-
-        int nalType = data[offset] & 0x1F;
-
-        switch (nalType) {
-            case H264Util.NAL_UNIT_TYPE_FU_A:
-                if (length < 2) {
-                    return null;
-                }
-                processFuAPacket(data, offset, length, data[offset + 1] & 0xC0);
-                break;
-
-            case H264Util.NAL_UNIT_TYPE_STAP_A:
-                Frame[] frames = processStapA(sample, data, offset, length);
-                clear();
-                currentFragmentNalType = H264Util.NAL_UNIT_TYPE_UNSPECIFIED;
-                return frames;
-
-            case H264Util.NAL_UNIT_TYPE_STAP_B:
-            case H264Util.NAL_UNIT_TYPE_MTAP16:
-            case H264Util.NAL_UNIT_TYPE_MTAP24:
-            case H264Util.NAL_UNIT_TYPE_FU_B:
-                // TODO: Handle FU-B packets if needed
-                // TODO: Handle other NAL unit types if needed
-                Log.println(Log.ASSERT, "tag", "NAL unit type not supported: " + nalType);
-                break;
-
-            default:
-                processSingleNalUnit(data, offset, length);
-                break;
-        }
-
-        if(nalUnit == null)
-            return null;
-
-        try {
-            resArray[0] = new Frame(nalUnit, sample.getTimestamp(), sample.getTrack(), frameType);
-            return resArray;
-        } finally {
-            frameType = 0;
-            currentFragmentNalType = H264Util.NAL_UNIT_TYPE_UNSPECIFIED;
-            nalUnit = null;
-        }
-    }
-
-    @Override
-    public int getBufferSize() {
-        return len;
-    }
-
-    @Override
-    public void clear() {
-        off = 0;
-        len = 0;
-        nalUnit = null;
-    }
-
-    private void processFuAPacket(byte[] data, int offset, int len, int packFlag) {
-        byte nalHeader = (byte) ((data[offset] & 0xE0) | (data[offset + 1] & 0x1F));
-        byte nalUnitType = (byte) (nalHeader & 0x1F);
-
-        switch (packFlag) {
-            case 0x80:
-                // Start of a fragmented NAL unit
-                currentFragmentNalType = nalUnitType;
-                clear();
-                writeToBuffer(Constants.H264_NAL_PREFIX); // NAL unit prefix
-                writeToBuffer(nalHeader); // NAL unit header
-                writeToBuffer(data, offset + 2, len - 2); // NAL unit payload
-                break;
-            case 0x00:
-                // Middle part of a fragmented NAL unit
-                if (currentFragmentNalType == nalUnitType) {
-                    writeToBuffer(data, offset + 2, len - 2); // NAL unit payload
-                }
-                //else Nal type mismatch
-                break;
-            case 0x40:
-                // End of a fragmented NAL unit
-                if(currentFragmentNalType != nalUnitType){
-                    //Nal type mismatch
-                    return;
-                }
-
-                int nalUnitLength = this.len + len - 2;
-                nalUnit = new byte[nalUnitLength];
-
-                synchronized (buf) {
-                    System.arraycopy(buf, 0, nalUnit, 0, this.len); // Buffered data
-                    System.arraycopy(data, offset + 2, nalUnit, this.len, len - 2); // NAL unit payload just received
-                }
-
-                if(H264Util.isNalUnitKeyFrame(nalUnitType)){
-                    frameType = Frame.SYNC_FRAME;
-                } else if(H264Util.isNAlUnitConfig(nalUnitType)){
-                    frameType = Frame.CONFIG_FRAME;
-                } else {
-                    frameType = Frame.NON_SYNC_FRAME;
-                }
-
-                break;
-        }
-    }
-
-    private void processSingleNalUnit(byte[] data, int off, int length) {
-        nalUnit = new byte[4 + length];
-        nalUnit[0] = 0x00;
-        nalUnit[1] = 0x00;
-        nalUnit[2] = 0x00;
-        nalUnit[3] = 0x01;
-
-        byte nalUnitType = H264Util.getNalUnitType(data, off, length);
-
-        if(H264Util.isNalUnitKeyFrame(nalUnitType)){
-            frameType = Frame.SYNC_FRAME;
-        } else if(H264Util.isNAlUnitConfig(nalUnitType)){
-            frameType = Frame.CONFIG_FRAME;
-        } else {
-            frameType = Frame.NON_SYNC_FRAME;
-        }
-
-        System.arraycopy(data, off, nalUnit, 4, length);
+        int type = data[offset] & 0x1f;
+        if (type == H264Util.NAL_UNIT_TYPE_FU_A) return processFuA(sample);
+        clear();
+        if (type == H264Util.NAL_UNIT_TYPE_STAP_A) return processStapA(sample);
+        if (type < 1 || type > 23) return null;
+        checkSize(Constants.H264_NAL_PREFIX.length + size);
+        byte[] frameData = new byte[Constants.H264_NAL_PREFIX.length + size];
+        System.arraycopy(Constants.H264_NAL_PREFIX, 0, frameData, 0, Constants.H264_NAL_PREFIX.length);
+        System.arraycopy(data, offset, frameData, Constants.H264_NAL_PREFIX.length, size);
+        return new Frame[]{new Frame(frameData, sample.getTimestamp(), sample.getTrack(), frameType(type))};
     }
 
     @Nullable
-    private Frame[] processStapA(@NonNull Sample sample, byte[] data, int off, int length) {
-        int pos = off + 1;
-        int end = off + length;
-        List<Frame> frames = new ArrayList<>();
-
-        while (pos < end) {
-            if (end - pos < 2) {
-                return null;
-            }
-            int nalUnitLength = ((data[pos] & 0xFF) << 8) | (data[pos + 1] & 0xFF);
-            pos += 2;
-
-            if (nalUnitLength == 0 || nalUnitLength > end - pos) {
-                return null;
-            }
-
-            byte nalUnitType = (byte) (data[pos] & 0x1F);
-            int frameLength = Constants.H264_NAL_PREFIX.length + nalUnitLength;
-            if (frameLength > maxFrameSize) {
-                throw new BufferOverflowException();
-            }
-
-            byte[] frameData = new byte[frameLength];
-            System.arraycopy(Constants.H264_NAL_PREFIX, 0, frameData, 0, Constants.H264_NAL_PREFIX.length);
-            System.arraycopy(data, pos, frameData, Constants.H264_NAL_PREFIX.length, nalUnitLength);
-            frames.add(new Frame(
-                    frameData,
-                    sample.getTimestamp(),
-                    sample.getTrack(),
-                    getFrameType(nalUnitType)
-            ));
-
-            pos += nalUnitLength;
+    private Frame[] processFuA(Sample sample) {
+        byte[] data = sample.getArray();
+        int offset = sample.getOffset();
+        int size = sample.getLength();
+        if (size < 2) { clear(); return null; }
+        int flags = data[offset + 1] & 0xff;
+        int type = flags & 0x1f;
+        boolean start = (flags & 0x80) != 0;
+        boolean end = (flags & 0x40) != 0;
+        if ((flags & 0x20) != 0 || (start && end) || type < 1 || type > 23) {
+            clear();
+            return null;
         }
+        int header = (data[offset] & 0xe0) | type;
+        long timestamp = sample instanceof RtpSample ? ((RtpSample) sample).rtpTimestamp : sample.getTimestamp();
+        int sequence = sample instanceof RtpSample ? ((RtpSample) sample).sequenceNumber : -1;
+        if (start) {
+            clear();
+            checkSize(Constants.H264_NAL_PREFIX.length + 1 + size - 2);
+            System.arraycopy(Constants.H264_NAL_PREFIX, 0, buffer, 0, Constants.H264_NAL_PREFIX.length);
+            length = Constants.H264_NAL_PREFIX.length;
+            buffer[length++] = (byte) header;
+            fragmentHeader = header;
+            fragmentTimestamp = timestamp;
+            frameTimestamp = sample.getTimestamp();
+            fragmentTrack = sample.getTrack();
+        } else if (length == 0 || header != fragmentHeader || timestamp != fragmentTimestamp
+                || sample.getTrack() != fragmentTrack
+                || (sequence != -1 && lastSequence != -1 && sequence != ((lastSequence + 1) & 0xffff))) {
+            clear();
+            return null;
+        }
+        checkSize(length + size - 2);
+        System.arraycopy(data, offset + 2, buffer, length, size - 2);
+        length += size - 2;
+        lastSequence = sequence;
+        if (!end) return null;
+        Frame frame = new Frame(Arrays.copyOf(buffer, length), frameTimestamp, fragmentTrack, frameType(type));
+        clear();
+        return new Frame[]{frame};
+    }
 
+    @Nullable
+    private Frame[] processStapA(Sample sample) {
+        byte[] data = sample.getArray();
+        int position = sample.getOffset() + 1;
+        int end = sample.getOffset() + sample.getLength();
+        List<Frame> frames = new ArrayList<>();
+        while (position < end) {
+            if (end - position < 2) return null;
+            int nalSize = ((data[position] & 0xff) << 8) | (data[position + 1] & 0xff);
+            position += 2;
+            if (nalSize == 0 || nalSize > end - position) return null;
+            int type = data[position] & 0x1f;
+            if ((data[position] & 0x80) != 0 || type < 1 || type > 23) return null;
+            int frameSize = Constants.H264_NAL_PREFIX.length + nalSize;
+            checkSize(frameSize);
+            byte[] frameData = new byte[frameSize];
+            System.arraycopy(Constants.H264_NAL_PREFIX, 0, frameData, 0, Constants.H264_NAL_PREFIX.length);
+            System.arraycopy(data, position, frameData, Constants.H264_NAL_PREFIX.length, nalSize);
+            frames.add(new Frame(frameData, sample.getTimestamp(), sample.getTrack(), frameType(type)));
+            position += nalSize;
+        }
         return frames.isEmpty() ? null : frames.toArray(new Frame[0]);
     }
 
-    private static byte getFrameType(byte nalUnitType) {
-        if (H264Util.isNalUnitKeyFrame(nalUnitType)) {
-            return Frame.SYNC_FRAME;
-        }
-        if (H264Util.isNAlUnitConfig(nalUnitType)) {
-            return Frame.CONFIG_FRAME;
-        }
+    private static byte frameType(int type) {
+        if (H264Util.isNalUnitKeyFrame((byte) type)) return Frame.SYNC_FRAME;
+        if (H264Util.isNAlUnitConfig((byte) type)) return Frame.CONFIG_FRAME;
         return Frame.NON_SYNC_FRAME;
     }
 
-    private void processStapB(byte[] data, int off, int length) {
-        int pos = off + 2;
-        int end = off + length;
-
-        while (pos < end) {
-            int nalUnitLength = ((data[pos] & 0xFF) << 8) | (data[pos + 1] & 0xFF);
-            pos += 2;
-
-            if (pos + nalUnitLength > end) {
-                // Invalid STAP-B packet
-                return;
-            }
-
-            byte nalUnitType = (byte) (data[pos] & 0x1F);
-
-            if (H264Util.isNalUnitKeyFrame(nalUnitType)) {
-                frameType = Frame.SYNC_FRAME;
-            } else if (H264Util.isNAlUnitConfig(nalUnitType)) {
-                frameType = Frame.CONFIG_FRAME;
-            } else {
-                frameType = Frame.NON_SYNC_FRAME;
-            }
-
-            pos += nalUnitLength;
+    private void checkSize(int size) {
+        if (size > maxFrameSize) {
+            clear();
+            throw new BufferOverflowException();
         }
     }
 
-    private void processMtap16(byte[] data, int off, int length) {
-        int pos = off + 2;
-        int end = off + length;
+    @Override
+    public int getBufferSize() { return length; }
 
-        while (pos < end) {
-            int nalUnitLength = ((data[pos] & 0xFF) << 8) | (data[pos + 1] & 0xFF);
-            pos += 2;
-
-            if (pos + nalUnitLength > end) {
-                // Invalid MTAP16 packet
-                return;
-            }
-
-            byte nalUnitType = (byte) (data[pos] & 0x1F);
-
-            if (H264Util.isNalUnitKeyFrame(nalUnitType)) {
-                frameType = Frame.SYNC_FRAME;
-            } else if (H264Util.isNAlUnitConfig(nalUnitType)) {
-                frameType = Frame.CONFIG_FRAME;
-            } else {
-                frameType = Frame.NON_SYNC_FRAME;
-            }
-
-            pos += nalUnitLength;
-        }
+    @Override
+    public void clear() {
+        length = 0;
+        fragmentHeader = 0;
+        fragmentTrack = null;
+        lastSequence = -1;
     }
-
-    private void processMtap24(byte[] data, int off, int length) {
-        int pos = off + 3;
-        int end = off + length;
-
-        while (pos < end) {
-            int nalUnitLength = ((data[pos] & 0xFF) << 16) | ((data[pos + 1] & 0xFF) << 8) | (data[pos + 2] & 0xFF);
-            pos += 3;
-
-            if (pos + nalUnitLength > end) {
-                // Invalid MTAP24 packet
-                return;
-            }
-
-            byte nalUnitType = (byte) (data[pos] & 0x1F);
-
-            if (H264Util.isNalUnitKeyFrame(nalUnitType)) {
-                frameType = Frame.SYNC_FRAME;
-            } else if (H264Util.isNAlUnitConfig(nalUnitType)) {
-                frameType = Frame.CONFIG_FRAME;
-            } else {
-                frameType = Frame.NON_SYNC_FRAME;
-            }
-
-            pos += nalUnitLength;
-        }
-    }
-
-    private void writeToBuffer(byte[] data, int off, int len){
-        synchronized (buf) {
-            System.arraycopy(data, off, buf, this.off, len);
-            this.off += len;
-            this.len += len;
-        }
-    }
-
-    private void writeToBuffer(byte[] data){
-        writeToBuffer(data, 0, data.length);
-    }
-
-    private void writeToBuffer(byte data){
-        synchronized (buf) {
-            buf[off++] = data;
-            len++;
-        }
-    }
-
 }
