@@ -433,15 +433,15 @@ public class RtspMediaExtractor extends MediaExtractor {
     @NonNull
     private static String getAggregateControlUri(@NonNull String baseUri, @NonNull Headers params) {
         for (Header param : params) {
-            if (param == null || param.name == null || param.value == null) {
+            if (param == null || param.getName() == null || param.getValue() == null) {
                 continue;
             }
-            if ("m".equalsIgnoreCase(param.name)) {
+            if ("m".equalsIgnoreCase(param.getName())) {
                 break;
             }
-            if ("a".equalsIgnoreCase(param.name) &&
-                    param.value.regionMatches(true, 0, "control:", 0, 8)) {
-                return resolveControlUri(baseUri, param.value.substring(8));
+            if ("a".equalsIgnoreCase(param.getName()) &&
+                    param.getValue().regionMatches(true, 0, "control:", 0, 8)) {
+                return resolveControlUri(baseUri, param.getValue().substring(8));
             }
         }
         return baseUri;
@@ -484,11 +484,11 @@ public class RtspMediaExtractor extends MediaExtractor {
         int trackCount = 0;
         for (Header param : params) {
             Util.checkInterrupted();
-            if (param == null || param.name == null || param.value == null) {
+            if (param == null || param.getName() == null || param.getValue() == null) {
                 continue;
             }
-            String name = param.name.toLowerCase(Locale.US);
-            String value = param.value.trim();
+            String name = param.getName().toLowerCase(Locale.US);
+            String value = param.getValue().trim();
             switch (name) {
                 case "m": {
                     addTrack(cb);
