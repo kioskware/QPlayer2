@@ -19,12 +19,14 @@ import java.io.IOException;
 import java.net.URI;
 import java.net.SocketTimeoutException;
 import java.util.Arrays;
-import java.util.HashSet;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.Random;
 import java.util.concurrent.TimeUnit;
 
 /** Direct RTP/UDP extraction using the same FORMAT_RTP decoder pipeline as RTSP. */
@@ -58,6 +60,11 @@ public class RtpMediaExtractor extends MediaExtractor {
     private volatile long sampleIndex = Constants.UNKNOWN_VALUE;
     private int reorderDelayMs = DEFAULT_REORDER_DELAY_MS;
     private int maxPendingPackets = DEFAULT_MAX_PENDING_PACKETS;
+    private final int receiverSsrc = new Random().nextInt();
+    private int rtcpReportIntervalMs = 5000;
+    private long lastReportAt;
+    private long ntpOriginMs = -1;
+    private final Map<Long, SenderReport> senderReports = new LinkedHashMap<>();
 
     public RtpMediaExtractor(@NonNull DatagramDataSource source, @Nullable TrackSelector selector,
                              @NonNull Tracks tracks) {
@@ -87,11 +94,21 @@ public class RtpMediaExtractor extends MediaExtractor {
         maxPendingPackets = count;
     }
 
+    /** Zero disables outgoing reports. Set before prepare(). */
+    public void setRtcpReportInterval(int intervalMs) {
+        if (prepared) throw new IllegalStateException("Already prepared");
+        if (intervalMs < 0) throw new IllegalArgumentException("Negative RTCP report interval");
+        rtcpReportIntervalMs = intervalMs;
+    }
+
     @Override
     public void prepare(int timeout) throws IOException {
         if (prepared) throw new IllegalStateException("Already prepared");
         if (!dataSource.isConnected()) throw new IllegalStateException("Data source is not connected");
         streams.clear();
+        senderReports.clear();
+        ntpOriginMs = -1;
+        lastReportAt = 0;
         for (Track track : tracks) {
             RtpTrackConfig.validateTrack(track);
             if (streams.containsKey(track.getPayloadType())) {
@@ -120,6 +137,7 @@ public class RtpMediaExtractor extends MediaExtractor {
             checkPrepared();
             if (Thread.currentThread().isInterrupted()) throw new InterruptedException();
             long now = System.nanoTime();
+            sendReportIfNeeded(now);
             int waitMs = 100;
             for (StreamState stream : streams.values()) {
                 RtpSample sample = stream.poll(now);
@@ -156,19 +174,65 @@ public class RtpMediaExtractor extends MediaExtractor {
         List<RtcpParser.Report> reports = RtcpParser.parsePacket(readBuffer, length);
         if (reports == null) return;
         for (RtcpParser.Report report : reports) {
+            if (!report.bye) {
+                if (senderReports.size() >= 32 && !senderReports.containsKey(report.ssrc)) {
+                    senderReports.remove(senderReports.keySet().iterator().next());
+                }
+                senderReports.put(report.ssrc, new SenderReport(report, System.nanoTime()));
+            } else {
+                senderReports.remove(report.ssrc);
+            }
             for (StreamState stream : streams.values()) {
                 if (stream.ssrc != report.ssrc) continue;
                 if (report.bye) {
-                    stream.retiredSources.add(report.ssrc);
+                    stream.retire(report.ssrc);
                     stream.pending.clear();
                     stream.ssrc = -1;
                     stream.discontinuity = true;
                 } else {
                     stream.track.setMetadata("rtcp-ntp-timestamp-ms", report.ntpTimestampMs);
                     stream.track.setMetadata("rtcp-rtp-timestamp", report.rtpTimestamp);
+                    if (ntpOriginMs == -1 && stream.lastRtpTimestamp != -1) {
+                        ntpOriginMs = report.ntpTimestampMs
+                                + (int) (stream.lastRtpTimestamp - report.rtpTimestamp) * 1000L / stream.track.getClockRate()
+                                - stream.lastTimeMs;
+                    }
                 }
             }
         }
+    }
+
+    private void sendReportIfNeeded(long now) {
+        if (rtcpReportIntervalMs == 0 || TimeUnit.NANOSECONDS.toMillis(now - lastReportAt) < rtcpReportIntervalMs) return;
+        List<RtcpReportBuilder.Block> blocks = new ArrayList<>();
+        for (StreamState stream : streams.values()) {
+            if (stream.ssrc == -1) continue;
+            RtcpReportBuilder.Block block = new RtcpReportBuilder.Block();
+            block.ssrc = stream.ssrc;
+            long expected = stream.highestSequence - stream.baseSequence + 1;
+            block.lost = expected - stream.receivedPackets;
+            long expectedInterval = expected - stream.previousExpected;
+            long lostInterval = expectedInterval - (stream.receivedPackets - stream.previousReceived);
+            block.fractionLost = expectedInterval <= 0 || lostInterval <= 0 ? 0
+                    : (int) Math.min(255, (lostInterval << 8) / expectedInterval);
+            block.highestSequence = stream.highestSequence;
+            block.jitter = (long) stream.jitter;
+            SenderReport report = senderReports.get(stream.ssrc);
+            if (report != null) {
+                block.lastSenderReport = report.report.compactNtpTimestamp;
+                block.delaySinceReport = (now - report.receivedAt) * 65536L / 1_000_000_000L;
+            }
+            stream.previousExpected = expected;
+            stream.previousReceived = stream.receivedPackets;
+            blocks.add(block);
+        }
+        if (blocks.isEmpty()) return;
+        try {
+            datagramSource.sendControlDatagram(RtcpReportBuilder.receiverReport(receiverSsrc, blocks));
+        } catch (IOException ignored) {
+            // Feedback failure must not interrupt media reception.
+        }
+        lastReportAt = now;
     }
 
     private int effectiveTimeout() {
@@ -196,6 +260,10 @@ public class RtpMediaExtractor extends MediaExtractor {
 
     @Override
     public void close() {
+        if (prepared && dataSource.isConnected() && rtcpReportIntervalMs > 0) {
+            try { datagramSource.sendControlDatagram(RtcpReportBuilder.bye(receiverSsrc)); }
+            catch (IOException | IllegalStateException ignored) {}
+        }
         prepared = false;
     }
 
@@ -214,7 +282,7 @@ public class RtpMediaExtractor extends MediaExtractor {
     private final class StreamState {
         final Track track;
         final TreeMap<Long, PendingPacket> pending = new TreeMap<>();
-        final Set<Long> retiredSources = new HashSet<>();
+        final Set<Long> retiredSources = new LinkedHashSet<>();
         long ssrc = -1;
         long nextSequence;
         long lastRtpTimestamp = -1;
@@ -222,6 +290,14 @@ public class RtpMediaExtractor extends MediaExtractor {
         long baseTimeMs;
         long lastTimeMs;
         boolean discontinuity;
+        long baseSequence;
+        long highestSequence;
+        long receivedPackets;
+        long previousExpected;
+        long previousReceived;
+        double jitter;
+        int previousTransit;
+        int restartSequence = -1;
 
         StreamState(Track track) { this.track = track; }
 
@@ -229,21 +305,46 @@ public class RtpMediaExtractor extends MediaExtractor {
             long source = packet.header.ssrc;
             if (retiredSources.contains(source)) return;
             if (source != ssrc) {
-                if (ssrc != -1) retiredSources.add(ssrc);
-                pending.clear();
-                discontinuity = lastRtpTimestamp != -1;
-                baseTimeMs = lastTimeMs;
-                timestampTicks = 0;
-                lastRtpTimestamp = -1;
+                if (ssrc != -1) retire(ssrc);
+                reset(packet.header.sequenceNumber);
                 ssrc = source;
-                nextSequence = packet.header.sequenceNumber;
             }
             int distance = (packet.header.sequenceNumber - (int) nextSequence) & 0xffff;
-            if (distance >= 0x8000) return; // Late/duplicate packet already emitted.
+            if (distance > 3000 && distance < 65536 - 100) {
+                if (packet.header.sequenceNumber != restartSequence) {
+                    restartSequence = (packet.header.sequenceNumber + 1) & 0xffff;
+                    return;
+                }
+                reset(packet.header.sequenceNumber);
+                discontinuity = true;
+                distance = 0;
+            } else if (distance >= 0x8000) return; // Late/duplicate packet already emitted.
             long sequence = nextSequence + distance;
             if (!pending.containsKey(sequence)) {
                 pending.put(sequence, new PendingPacket(packet, Arrays.copyOf(data, length), now));
+                highestSequence = Math.max(highestSequence, sequence);
+                int transit = (int) ((double) now / 1_000_000_000 * track.getClockRate()) - (int) packet.header.timestamp;
+                if (receivedPackets > 0) jitter += (Math.abs((long) (transit - previousTransit)) - jitter) / 16;
+                previousTransit = transit;
+                receivedPackets++;
             }
+        }
+
+        void retire(long source) {
+            retiredSources.add(source);
+            if (retiredSources.size() > 64) retiredSources.remove(retiredSources.iterator().next());
+        }
+
+        void reset(int sequence) {
+            pending.clear();
+            discontinuity = discontinuity || lastRtpTimestamp != -1;
+            baseTimeMs = lastTimeMs;
+            timestampTicks = 0;
+            lastRtpTimestamp = -1;
+            nextSequence = baseSequence = highestSequence = sequence;
+            receivedPackets = previousExpected = previousReceived = 0;
+            jitter = 0;
+            restartSequence = -1;
         }
 
         RtpSample poll(long now) {
@@ -262,6 +363,13 @@ public class RtpMediaExtractor extends MediaExtractor {
             if (lastRtpTimestamp != -1) timestampTicks += (int) (header.timestamp - lastRtpTimestamp);
             lastRtpTimestamp = header.timestamp;
             long timeMs = baseTimeMs + timestampTicks * 1000 / track.getClockRate();
+            SenderReport report = senderReports.get(ssrc);
+            if (report != null) {
+                long ntpTimeMs = report.report.ntpTimestampMs
+                        + (int) (header.timestamp - report.report.rtpTimestamp) * 1000L / track.getClockRate();
+                if (ntpOriginMs == -1) ntpOriginMs = ntpTimeMs - timeMs;
+                timeMs = ntpTimeMs - ntpOriginMs;
+            }
             lastTimeMs = Math.max(lastTimeMs, timeMs);
             byte[] data = packet.data;
             int offset = packet.packet.payloadOffset;
@@ -276,6 +384,15 @@ public class RtpMediaExtractor extends MediaExtractor {
             if (pending.isEmpty()) return 100;
             long age = TimeUnit.NANOSECONDS.toMillis(now - pending.firstEntry().getValue().receivedAt);
             return (int) Math.max(1, reorderDelayMs - age);
+        }
+    }
+
+    private static final class SenderReport {
+        final RtcpParser.Report report;
+        final long receivedAt;
+        SenderReport(RtcpParser.Report report, long receivedAt) {
+            this.report = report;
+            this.receivedAt = receivedAt;
         }
     }
 

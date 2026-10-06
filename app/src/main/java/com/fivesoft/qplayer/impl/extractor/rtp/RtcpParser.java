@@ -14,12 +14,15 @@ public final class RtcpParser {
         public final boolean bye;
         public final long ntpTimestampMs;
         public final long rtpTimestamp;
+        public final long compactNtpTimestamp;
 
-        private Report(long ssrc, boolean bye, long ntpTimestampMs, long rtpTimestamp) {
+        private Report(long ssrc, boolean bye, long ntpTimestampMs, long rtpTimestamp,
+                       long compactNtpTimestamp) {
             this.ssrc = ssrc;
             this.bye = bye;
             this.ntpTimestampMs = ntpTimestampMs;
             this.rtpTimestamp = rtpTimestamp;
+            this.compactNtpTimestamp = compactNtpTimestamp;
         }
     }
 
@@ -51,13 +54,15 @@ public final class RtcpParser {
                 long ntpMs = unsignedInt(data, offset + 8) * 1000
                         + (unsignedInt(data, offset + 12) * 1000 >>> 32);
                 reports.add(new Report(unsignedInt(data, offset + 4), false, ntpMs,
-                        unsignedInt(data, offset + 16)));
+                        unsignedInt(data, offset + 16),
+                        ((unsignedInt(data, offset + 8) & 0xffff) << 16)
+                                | (unsignedInt(data, offset + 12) >>> 16)));
             } else if (type == 201 && bodyLength < 8 + count * 24) {
                 return null;
             } else if (type == 203) {
                 if (bodyLength < 4 + count * 4) return null;
                 for (int i = 0; i < count; i++) {
-                    reports.add(new Report(unsignedInt(data, offset + 4 + i * 4), true, 0, 0));
+                    reports.add(new Report(unsignedInt(data, offset + 4 + i * 4), true, 0, 0, 0));
                 }
             }
             offset += packetLength;
