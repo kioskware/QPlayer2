@@ -1,13 +1,9 @@
-package com.fivesoft.qplayer.common;
+package com.fivesoft.qplayer.common
 
-public class Size {
-
-    public final int width;
-    public final int height;
-
-    public Size(int width, int height){
-        this.width = width;
-        this.height = height;
-    }
-
-}
+/**
+ * Represents size of the video frame in pixels.
+ */
+data class Size(
+    val width: Int,
+    val height: Int
+)

@@ -43,8 +43,8 @@ public class RtspSession {
         this.userAgent = userAgent;
         this.uri = Objects.requireNonNull(uri);
         this.auth = auth;
-        if (auth != null && auth.token != null) {
-            this.authToken = new String(auth.token, StandardCharsets.ISO_8859_1);
+        if (auth != null && auth.getToken() != null) {
+            this.authToken = new String(auth.getToken(), StandardCharsets.ISO_8859_1);
         }
     }
 
@@ -270,7 +270,7 @@ public class RtspSession {
             return res;
         }
 
-        Credentials credentials = auth.credentials;
+        Credentials credentials = auth.getCredentials();
         RealmNonce rn = RtspUtil.getHeaderWwwAuthenticateDigestRealmAndNonce(res.header.getHeaders());
 
         if(rn == null) {
@@ -296,7 +296,7 @@ public class RtspSession {
         if (challenge == null) {
             return authToken;
         }
-        Credentials credentials = auth == null ? null : auth.credentials;
+        Credentials credentials = auth == null ? null : auth.getCredentials();
         String token = RtspUtil.getDigestAuthHeader(
                 credentials,
                 command,
@@ -333,4 +333,5 @@ public class RtspSession {
             //Ignore
         }
     }
+
 }

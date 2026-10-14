@@ -33,22 +33,22 @@ public class Headers implements Iterable<Header> {
     public List<String> getAll(String name) {
         List<String> res = new ArrayList<>();
         for(Header header : headers) {
-            if(header != null && header.name.equalsIgnoreCase(name))
-                res.add(header.value);
+            if(header != null && header.getName().equalsIgnoreCase(name))
+                res.add(header.getValue());
         }
         return res;
     }
 
     public String get(String name) {
         for (Header header : headers) {
-            if (header != null && header.name.equalsIgnoreCase(name))
-                return header.value;
+            if (header != null && header.getName().equalsIgnoreCase(name))
+                return header.getValue();
         }
         return null;
     }
 
     public void remove(String name) {
-        headers.removeIf(header -> header == null || header.name.equalsIgnoreCase(name));
+        headers.removeIf(header -> header == null || header.getName().equalsIgnoreCase(name));
     }
 
     public void clear() {
@@ -56,7 +56,7 @@ public class Headers implements Iterable<Header> {
     }
 
     public boolean contains(String name) {
-        return headers.stream().anyMatch(header -> header != null && header.name.equalsIgnoreCase(name));
+        return headers.stream().anyMatch(header -> header != null && header.getName().equalsIgnoreCase(name));
     }
 
     @NonNull

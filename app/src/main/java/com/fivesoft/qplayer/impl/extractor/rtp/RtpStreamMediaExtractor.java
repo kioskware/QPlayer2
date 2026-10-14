@@ -129,8 +129,7 @@ public final class RtpStreamMediaExtractor extends MediaExtractor {
 
     private void consumeTs(Sample sample) throws IOException {
         if (!(sample.getTrack() instanceof RtpTransportStreamTrack)) return;
-        if (sample instanceof RtpSample) {
-            RtpSample packet = (RtpSample) sample;
+        if (sample instanceof RtpSample packet) {
             if (lastSsrc != -1 && packet.ssrc != lastSsrc) ts.reset();
             else if (packet.discontinuity) ts.discontinuity();
             lastSsrc = packet.ssrc;

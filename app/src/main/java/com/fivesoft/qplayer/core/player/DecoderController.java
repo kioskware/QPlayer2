@@ -6,6 +6,7 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import com.fivesoft.qplayer.base.Frame;
+import com.fivesoft.qplayer.base.QPlayer;
 import com.fivesoft.qplayer.base.Sample;
 import com.fivesoft.qplayer.base.components.MediaDecoder;
 import com.fivesoft.qplayer.base.components.MediaDecoderOutput;
@@ -26,6 +27,7 @@ public class DecoderController<RendererType, DecoderType extends MediaDecoder<?,
 
     private volatile DecoderType decoder;
     private volatile MediaDecoderThread decoderThread;
+    private volatile boolean lowLatencyMode = QPlayer.DEFAULT_LOW_LATENCY_MODE;
 
     /**
      * Creates a new DecoderController.
@@ -77,6 +79,16 @@ public class DecoderController<RendererType, DecoderType extends MediaDecoder<?,
         }
     }
 
+    public void setLowLatencyMode(boolean lowLatencyMode) {
+        if(this.lowLatencyMode != lowLatencyMode) {
+            this.lowLatencyMode = lowLatencyMode;
+            DecoderType decoder = this.decoder;
+            if(decoder != null) {
+                decoder.setLowLatencyMode(lowLatencyMode);
+            }
+        }
+    }
+
     /**
      * Releases the decoder and the decoder thread.
      */
@@ -110,6 +122,8 @@ public class DecoderController<RendererType, DecoderType extends MediaDecoder<?,
                     MediaDecoderOutput<RendererType> output = outputCreator.create(track);
                     decoder.setOutput(output);
                 }
+
+                decoder.setLowLatencyMode(lowLatencyMode);
 
                 decoderThread = new MediaDecoderThread(decoder) {
                     @Override

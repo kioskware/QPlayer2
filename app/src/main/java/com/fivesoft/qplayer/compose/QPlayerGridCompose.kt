@@ -23,7 +23,7 @@ enum class PlayerSize(val weight: Int) {
 }
 
 data class PlayerEntity(
-    val state: QPlayerState,
+    val state: QPlayerComposeState,
     val name: String? = null,
     val aspectRatio: Float = 16f / 9f,
     val size: PlayerSize = PlayerSize.Medium

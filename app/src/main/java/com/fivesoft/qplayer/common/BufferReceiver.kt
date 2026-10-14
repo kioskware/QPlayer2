@@ -1,7 +1,14 @@
-package com.fivesoft.qplayer.common;
+package com.fivesoft.qplayer.common
 
-public interface BufferReceiver {
+import kotlin.ByteArray
 
-    boolean onBufferReceived(long timestamp, byte[] buffer, int offset, int length);
+interface BufferReceiver {
+
+    fun onBufferReceived(
+        timestamp: Long,
+        buffer: ByteArray,
+        offset: Int,
+        length: Int
+    ): Boolean
 
 }

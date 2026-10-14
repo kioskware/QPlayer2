@@ -310,11 +310,11 @@ public class RtspUtil {
     public static String getHeaderWwwAuthenticateBasicRealm(@NonNull Headers headers) throws InterruptedIOException {
         for (Header header : headers) {
             checkInterrupted();
-            if (header == null || header.name == null || header.value == null ||
-                    !"www-authenticate".equalsIgnoreCase(header.name)) {
+            if (header == null || header.getName() == null || header.getValue() == null ||
+                    !"www-authenticate".equalsIgnoreCase(header.getName())) {
                 continue;
             }
-            String value = header.value.trim();
+            String value = header.getValue().trim();
             if (value.regionMatches(true, 0, "Basic", 0, 5)) {
                 String realm = parseAuthenticationParameters(value).get("realm");
                 return realm == null ? "" : realm;
@@ -327,11 +327,11 @@ public class RtspUtil {
     public static RealmNonce getHeaderWwwAuthenticateDigestRealmAndNonce(@NonNull Headers headers) throws InterruptedIOException {
         for (Header header : headers) {
             checkInterrupted();
-            if (header == null || header.name == null || header.value == null ||
-                    !"www-authenticate".equalsIgnoreCase(header.name)) {
+            if (header == null || header.getName() == null || header.getValue() == null ||
+                    !"www-authenticate".equalsIgnoreCase(header.getName())) {
                 continue;
             }
-            String value = header.value.trim();
+            String value = header.getValue().trim();
             if (value.regionMatches(true, 0, "Digest", 0, 6)) {
                 Map<String, String> params = parseAuthenticationParameters(value);
                 String nonce = params.get("nonce");
@@ -419,13 +419,13 @@ public class RtspUtil {
 
     public static Integer getSupportedCapabilities(@NonNull Headers headers) {
         for (Header header : headers) {
-            if (header == null || header.name == null || header.value == null) {
+            if (header == null || header.getName() == null || header.getValue() == null) {
                 continue;
             }
-            String h = header.name.toLowerCase(Locale.US);
+            String h = header.getName().toLowerCase(Locale.US);
             if ("public".equals(h) || "allow".equals(h)) {
                 int mask = 0;
-                String[] tokens = header.value.toLowerCase(Locale.US).split(",");
+                String[] tokens = header.getValue().toLowerCase(Locale.US).split(",");
                 for (String token : tokens) {
                     switch (token.trim()) {
                         case "options":

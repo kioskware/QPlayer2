@@ -4,6 +4,7 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import com.fivesoft.qplayer.base.Frame;
+import com.fivesoft.qplayer.base.QPlayer;
 import com.fivesoft.qplayer.base.Sample;
 import com.fivesoft.qplayer.base.components.MediaDecoder;
 import com.fivesoft.qplayer.base.components.MediaDecoderOutput;
@@ -22,6 +23,8 @@ public class DecoderControllerMapper<RendererType, DecoderType extends MediaDeco
 
     private final int sampleFormat;
     private final int maxFrameSize;
+
+    private boolean lowLatencyMode = QPlayer.DEFAULT_LOW_LATENCY_MODE;
 
     public DecoderControllerMapper(@NonNull Resolver<MediaDecoder.Descriptor, DecoderType> resolver,
                                    @Nullable MediaDecoderOutput.Creator<RendererType> outputCreator,
@@ -47,6 +50,16 @@ public class DecoderControllerMapper<RendererType, DecoderType extends MediaDeco
         }
         if (controller != null)
             controller.release();
+    }
+
+    public void setLowLatencyMode(boolean lowLatencyMode) {
+        if(this.lowLatencyMode != lowLatencyMode) {
+            synchronized (decoders) {
+                for (DecoderController<?, ?> controller : decoders.values())
+                    controller.setLowLatencyMode(lowLatencyMode);
+            }
+            this.lowLatencyMode = lowLatencyMode;
+        }
     }
 
     public void releaseAll() {

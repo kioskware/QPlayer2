@@ -3,6 +3,7 @@ package com.fivesoft.qplayer.core.player;
 import android.util.Log;
 import android.view.Surface;
 
+import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import com.fivesoft.qplayer.base.Authentication;
@@ -41,6 +42,7 @@ class QPlayerImpl implements QPlayer<Surface, android.media.AudioTrack, Subtitle
     private volatile MainThread mainThread;
     private volatile boolean started = false;
     private boolean isReleased = false;
+    private boolean lowLatencyMode = QPlayer.DEFAULT_LOW_LATENCY_MODE;
 
     private final BitrateMeasure bitrateMeasure = new BitrateMeasure(50, 5000);
 
@@ -139,6 +141,22 @@ class QPlayerImpl implements QPlayer<Surface, android.media.AudioTrack, Subtitle
     }
 
     @Override
+    public int setDecoderLowLatency(boolean lowLatency) {
+        if (this.lowLatencyMode != lowLatency) {
+            this.lowLatencyMode = lowLatency;
+            MainThread mt = mainThread;
+            if (mt != null) {
+                mt.decodersManager.setLowLatencyMode(
+                        lowLatency,
+                        lowLatency,
+                        lowLatency
+                );
+            }
+        }
+        return 0;
+    }
+
+    @Override
     public void setTrackSelector(@Nullable TrackSelector selector) {
         if (trackSelector != selector) {
             this.trackSelector = selector;
@@ -161,7 +179,7 @@ class QPlayerImpl implements QPlayer<Surface, android.media.AudioTrack, Subtitle
         this.subtitleOutputCreator = creator;
     }
 
-    @Nullable
+    @NonNull
     @Override
     public Tracks getTracks() {
         return tracks;
@@ -238,12 +256,13 @@ class QPlayerImpl implements QPlayer<Surface, android.media.AudioTrack, Subtitle
         }
     }
 
+
     private class MainThread extends Thread {
 
         private DataSource cDataSource;
         private MediaExtractor cExtractor;
 
-        private DecodersManager decodersManager;
+        public DecodersManager decodersManager;
 
         @Override
         public void run() {
@@ -283,6 +302,12 @@ class QPlayerImpl implements QPlayer<Surface, android.media.AudioTrack, Subtitle
                         decodersManager = DecodersManager.createDefault(videoOutputCreator,
                                 audioOutputCreator, subtitleOutputCreator, sampleFormat);
 
+                        decodersManager.setLowLatencyMode(
+                                lowLatencyMode,
+                                lowLatencyMode,
+                                lowLatencyMode
+                        );
+
                         if (buffer != null) {
                             //Release old buffer
                             buffer.destroy();
@@ -304,7 +329,7 @@ class QPlayerImpl implements QPlayer<Surface, android.media.AudioTrack, Subtitle
                         sample = cExtractor.nextSample();
                         if (sample != null) {
                             bitrateMeasure.countBytes(sample.getLength() + 4); //+4 for sample header.
-                                                                               //This may depend on protocol, but let's treat it as a estimation
+                            //This may depend on protocol, but let's treat it as an estimation
                             sample.getTrack().notifySampleReceived(sample);
 
                             Frame[] frame = decodersManager.feed(sample);
@@ -393,7 +418,7 @@ class QPlayerImpl implements QPlayer<Surface, android.media.AudioTrack, Subtitle
                 return true;
             }
 
-            if(cExtractor == null) {
+            if (cExtractor == null) {
                 return false;
             }
 

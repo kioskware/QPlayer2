@@ -13,6 +13,7 @@ import androidx.annotation.Nullable;
 import com.fivesoft.qplayer.base.Csd;
 import com.fivesoft.qplayer.base.Frame;
 import com.fivesoft.qplayer.base.MediaDecoderException;
+import com.fivesoft.qplayer.base.QPlayer;
 import com.fivesoft.qplayer.base.Sample;
 import com.fivesoft.qplayer.base.UnsupportedSampleException;
 import com.fivesoft.qplayer.base.components.MediaDecoderOutput;
@@ -90,7 +91,7 @@ public class AACDecoder extends AudioDecoder {
     private volatile MediaCodec codec;
     private volatile MediaFormat format;
     private volatile Csd csd;
-    private volatile boolean lowLatencyMode = true;
+    private volatile boolean lowLatencyMode = QPlayer.DEFAULT_LOW_LATENCY_MODE;
     private volatile boolean released = false;
     private final FrameBuilder frameBuilder;
     private volatile MediaCodec.BufferInfo bufferInfo;

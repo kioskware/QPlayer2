@@ -48,15 +48,10 @@ public class SocketDataSource extends DataSource {
             if (host == null)
                 return 0;
 
-            switch (scheme) {
-                case "http":
-                case "rtsp":
-                case "rtmp":
-                case "tcp":
-                    return 1;
-                default:
-                    return 0;
-            }
+            return switch (scheme) {
+                case "http", "rtsp", "rtmp", "tcp" -> 1;
+                default -> 0;
+            };
         }
 
         @Nullable
@@ -71,6 +66,7 @@ public class SocketDataSource extends DataSource {
             }
             return null;
         }
+
     };
 
     private final Object sl = new Object();

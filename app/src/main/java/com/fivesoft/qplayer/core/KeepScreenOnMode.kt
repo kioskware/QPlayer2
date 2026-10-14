@@ -1,10 +1,9 @@
-package com.fivesoft.qplayer.core;
+package com.fivesoft.qplayer.core
 
 /**
  * Defines the mode of the keep screen on feature.
  */
-public enum  KeepScreenOnMode {
-
+enum class KeepScreenOnMode {
     /**
      * Keep the screen on only when the player is started.
      */
@@ -19,5 +18,4 @@ public enum  KeepScreenOnMode {
      * Never keep the screen on.
      */
     NEVER
-
 }

@@ -1,5 +1,6 @@
 package com.fivesoft.qplayer.demo
 
+import android.net.wifi.WifiManager
 import android.os.Bundle
 import android.view.MotionEvent
 import android.view.WindowManager
@@ -45,10 +46,9 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.fivesoft.qplayer.compose.PlayerEntity
-import com.fivesoft.qplayer.compose.PlayerSize
 import com.fivesoft.qplayer.compose.QPlayerGridCompose
 import com.fivesoft.qplayer.compose.QPlayerGridState
-import com.fivesoft.qplayer.compose.QPlayerState
+import com.fivesoft.qplayer.compose.QPlayerComposeState
 import com.fivesoft.qplayer.steering.LogitechG920Controller
 import com.fivesoft.qplayer.steering.SteeringInputState
 import kotlinx.coroutines.flow.StateFlow
@@ -58,9 +58,13 @@ import kotlin.math.roundToInt
 class MainActivity : AppCompatActivity() {
 
     private lateinit var steeringController: LogitechG920Controller
+    private lateinit var multicastLock: WifiManager.MulticastLock
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val wifiService: WifiManager = getSystemService(WIFI_SERVICE) as WifiManager
+        multicastLock = wifiService.createMulticastLock("MainActivity")
+
         steeringController = LogitechG920Controller(this)
         val preferences = getSharedPreferences(PLAYER_PREFERENCES, MODE_PRIVATE)
         val savedStreamUrl = preferences.getString(PREF_STREAM_URL, STREAM_URL) ?: STREAM_URL
@@ -116,7 +120,7 @@ private fun PlayerGrid(
     var drivingMode by rememberSaveable { mutableStateOf(initialDrivingMode) }
     var settingsVisible by rememberSaveable { mutableStateOf(false) }
     val playerState = remember {
-        QPlayerState(
+        QPlayerComposeState(
             bufferLatency = mutableIntStateOf(latencyMs),
             mediaSource = mutableStateOf(URI.create(streamUrl)),
             audioEnabled = mutableStateOf(true)
@@ -274,13 +278,6 @@ private fun String.toStreamUriOrNull(): URI? = trim()
     .takeIf(String::isNotEmpty)
     ?.let { value -> runCatching { URI.create(value) }.getOrNull() }
     ?.takeIf { uri -> uri.isAbsolute && uri.rawSchemeSpecificPart.isNotEmpty() }
-
-private val PLAYER_SIZES = listOf(
-    PlayerSize.ExtraLarge,
-    PlayerSize.Large,
-    PlayerSize.Medium,
-    PlayerSize.Small
-)
 
 private const val PLAYER_ASPECT_RATIO = 16f / 9f
 private const val MAX_LATENCY_MS = 2_000

@@ -59,6 +59,12 @@ public class DecodersManager {
         );
     }
 
+    public void setLowLatencyMode(boolean video, boolean audio, boolean subtitles) {
+        videoDecoders.setLowLatencyMode(video);
+        audioDecoders.setLowLatencyMode(audio);
+        subtitleDecoders.setLowLatencyMode(subtitles);
+    }
+
     @Nullable
     public Frame[] feed(@NonNull Sample sample){
         Track track = sample.getTrack();

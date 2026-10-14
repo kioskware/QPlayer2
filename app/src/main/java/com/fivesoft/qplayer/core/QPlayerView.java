@@ -179,13 +179,10 @@ public class QPlayerView extends ViewGroup {
         return this;
     }
 
-    /**
-     * Sets authentication to be used for media extractors that require it.<br>
-     * May be null if authentication is not required.
-     * @param auth Authentication to be used
-     * @return This instance for chaining
-     */
-
+    public QPlayerView setDecoderLowLatency(boolean lowLatency) {
+        player.setDecoderLowLatency(lowLatency);
+        return this;
+    }
     public QPlayerView setAuthentication(@Nullable Authentication auth) {
         player.setAuthentication(auth);
         return this;
@@ -285,7 +282,7 @@ public class QPlayerView extends ViewGroup {
         return this;
     }
 
-    @Nullable
+    @NonNull
     public Tracks getTracks() {
         return player.getTracks();
     }

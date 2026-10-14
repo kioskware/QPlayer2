@@ -33,7 +33,6 @@ import java.io.OutputStream;
  *     After finishing using the source, you should close it by calling {@link #close()} method or by using try-with-resources statement.<br>
  * </p>
  */
-
 public abstract class DataSource implements AutoCloseable, Timeoutable {
 
     /**
@@ -44,13 +43,11 @@ public abstract class DataSource implements AutoCloseable, Timeoutable {
     /**
      * Default I/O timeout in milliseconds. Used by {@link #getInputStream()} and {@link #getOutputStream()}.
      */
-
     public static final int DEFAULT_IO_TIMEOUT = 10000;
 
     /**
      * Indicates that the length of the data source is unknown.
      */
-
     public static final long UNKNOWN_LENGTH = Constants.UNKNOWN_VALUE;
 
     /**
@@ -58,7 +55,6 @@ public abstract class DataSource implements AutoCloseable, Timeoutable {
      * @return The length of the data source in bytes or {@link #UNKNOWN_LENGTH}
      * if the length is unknown (most common for live streams).
      */
-
     public abstract long getLength();
 
     /**
@@ -69,7 +65,6 @@ public abstract class DataSource implements AutoCloseable, Timeoutable {
      * @throws IOException If an I/O error occurs while connecting to the data source.
      * @throws IllegalStateException If the data source is already connected.
      */
-
     public abstract void connect(int timeout) throws IOException;
 
     /**
@@ -80,7 +75,6 @@ public abstract class DataSource implements AutoCloseable, Timeoutable {
      * @throws IllegalStateException If the data source is already connected.
      * @see #connect(int)
      */
-
     public final void connect() throws IOException {
         connect(DEFAULT_CONNECT_TIMEOUT);
     }
@@ -89,7 +83,6 @@ public abstract class DataSource implements AutoCloseable, Timeoutable {
      * Checks if the data source is connected and ready to use.<br>
      * @return True if the data source is connected.
      */
-
     public abstract boolean isConnected();
 
     /**
@@ -99,7 +92,6 @@ public abstract class DataSource implements AutoCloseable, Timeoutable {
      * @throws IllegalStateException If the data source is not connected.
      * @throws IOException If an I/O error occurs while creating or getting the input stream.
      */
-
     @NonNull
     public abstract InputStream getInputStream() throws IOException;
 
@@ -107,7 +99,6 @@ public abstract class DataSource implements AutoCloseable, Timeoutable {
      * Returns true if the data source supports output stream.<br>
      * @return True if the data source supports {@link #getOutputStream()}. (the method will return non-null)
      */
-
     public abstract boolean isOutSupported();
 
     /**
@@ -118,7 +109,6 @@ public abstract class DataSource implements AutoCloseable, Timeoutable {
      * @throws IllegalStateException If the data source supports output stream, but it is not connected.
      * @throws IOException If an I/O error occurs while creating or getting the output stream.
      */
-
     @Nullable
     public abstract OutputStream getOutputStream() throws IllegalStateException, IOException;
 
@@ -129,7 +119,6 @@ public abstract class DataSource implements AutoCloseable, Timeoutable {
      * Media source can be reopened by calling {@link #connect()} again.
      * @throws IOException If an I/O error occurs while closing the data source.
      */
-
     @Override
     public abstract void close() throws IOException;
 
@@ -138,14 +127,12 @@ public abstract class DataSource implements AutoCloseable, Timeoutable {
      * All pending read/write operations will be aborted and all streams will be closed automatically, but opened again.<br>
      * @throws IOException If an I/O error occurs while closing or opening the data source.
      */
-
     public void reconnect() throws IOException {
         close();
         connect();
     }
 
     //Timeoutable implementation
-
     private volatile int timeout = DEFAULT_IO_TIMEOUT;
 
     /**
@@ -153,7 +140,6 @@ public abstract class DataSource implements AutoCloseable, Timeoutable {
      * The timeout may be not applied yet, but it will be applied before the next read/write operation.
      * @return The timeout in milliseconds or non-positive value if no timeout. (waiting forever)
      */
-
     @Override
     public final int getTimeout() {
         return timeout;
@@ -164,7 +150,6 @@ public abstract class DataSource implements AutoCloseable, Timeoutable {
      * @param timeout The timeout value in milliseconds. Non-positive value means no timeout. (waiting forever)
      * @throws RuntimeException If an I/O error occurs while setting the timeout.
      */
-
     @Override
     public final void setTimeout(int timeout) throws RuntimeException {
         if(timeout == this.timeout)
@@ -186,7 +171,6 @@ public abstract class DataSource implements AutoCloseable, Timeoutable {
      *                API will care to provide only non-negative values.
      * @throws IOException If an I/O error occurs while setting the timeout.
      */
-
     protected abstract void onTimeoutSet(int timeout) throws IOException;
 
 }

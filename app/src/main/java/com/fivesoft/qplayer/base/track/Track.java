@@ -427,6 +427,7 @@ public abstract class Track extends ListenerManager<TrackListener> {
         forEachListener((s, l) -> l.onFrameRendered(Track.this, timestamp));
     }
 
+    @NonNull
     @Override
     public String toString() {
         return "Track{" +

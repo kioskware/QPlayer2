@@ -1,5 +1,6 @@
 package com.fivesoft.qplayer.base;
 
+import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import com.fivesoft.qplayer.base.components.MediaDecoderOutput;
@@ -14,6 +15,7 @@ public interface QPlayer<VideoRendererType,
 
     int DEFAULT_BUFFER_LATENCY = 500;
     float DEFAULT_VOLUME = 0.5f;
+    boolean DEFAULT_LOW_LATENCY_MODE = true;
 
     //Ok states
     int STATE_STOPPED = 0;
@@ -69,6 +71,7 @@ public interface QPlayer<VideoRendererType,
      * @return The authentication or null if no authentication is needed.
      */
 
+    @Nullable
     Authentication getAuthentication();
 
     /**
@@ -139,6 +142,13 @@ public interface QPlayer<VideoRendererType,
 
     int setBufferLatency(long latency);
 
+    /**
+     * Sets low latency flag to the decoder(s).
+     * @param lowLatency whether enable low latency mode for all decoders.
+     * @return 0 if flag set successfully, error code otherwise.
+     */
+    int setDecoderLowLatency(boolean lowLatency);
+
      /**
      * Sets {@link TrackSelector} to be used for selecting tracks.<br>
      * @param selector The track selector or null to use default track selector.
@@ -172,10 +182,10 @@ public interface QPlayer<VideoRendererType,
 
     /**
      * Gets current tracks including both playing and not playing ones.<br>
-     * @return Current tracks or null if no tracks are available.
+     * @return Current tracks, same instance for entire lifetime of the player instance.
      */
 
-    @Nullable
+    @NonNull
     Tracks getTracks();
 
     /**
@@ -213,7 +223,6 @@ public interface QPlayer<VideoRendererType,
      * Sets data source read timeout in milliseconds.<br>
      * @param timeout The timeout in milliseconds.
      */
-
     void setReadTimeout(int timeout);
 
 }

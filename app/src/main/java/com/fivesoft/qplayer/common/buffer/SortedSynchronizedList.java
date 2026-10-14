@@ -24,6 +24,7 @@ public class SortedSynchronizedList<T> {
             if(s == 0) {
                 parent.add(obj);
                 changedAfterGet = false;
+                notifyChanged();
                 return;
             }
 
@@ -37,14 +38,15 @@ public class SortedSynchronizedList<T> {
                     }
                     parent.add(i, obj);
                     added = true;
+                    notifyChanged();
                     break;
                 }
             }
 
             if(!added){
                 parent.add(obj);
+                notifyChanged();
             }
-
         }
     }
 
@@ -66,7 +68,7 @@ public class SortedSynchronizedList<T> {
     }
 
     @Nullable
-    public T  getLast(){
+    public T getLast(){
         synchronized (parent){
             int s = parent.size();
             changedAfterGet = false;
@@ -78,19 +80,19 @@ public class SortedSynchronizedList<T> {
 
     public boolean remove(int index){
         synchronized (parent){
-
             if(index < 0 || index >= parent.size())
                 return false;
 
             parent.remove(index);
-
+            notifyChanged();
             return true;
         }
     }
 
     public void clear(){
         synchronized (parent){
-            clear();
+            parent.clear();
+            notifyChanged();
         }
     }
 
@@ -98,6 +100,10 @@ public class SortedSynchronizedList<T> {
         synchronized (parent) {
             return parent.size();
         }
+    }
+
+    private void notifyChanged(){
+
     }
 
 }

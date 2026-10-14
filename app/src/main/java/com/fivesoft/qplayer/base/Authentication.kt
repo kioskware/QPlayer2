@@ -1,85 +1,87 @@
-package com.fivesoft.qplayer.base;
+package com.fivesoft.qplayer.base
 
-import androidx.annotation.Nullable;
-
-import com.fivesoft.qplayer.common.Credentials;
+import com.fivesoft.qplayer.common.Credentials
 
 /**
  * Holds authentication data. This supports many authentication methods:
- * <ul>
- *     <li>Basic authentication (username & password)</li>
- *     <li>Token authentication</li>
- *     <li>Username, password and token (rare type)</li>
- *     <li>No authentication</li>
- * </ul>
+ * 
+ *  * Basic authentication (username & password)
+ *  * Token authentication
+ *  * Username, password and token (rare type)
+ *  * No authentication
+ * 
  */
-
-public class Authentication {
-
+data class Authentication(
     /**
      * Credentials for basic authentication. May be null if not used.
      */
-
-    @Nullable
-    public final Credentials credentials;
-
+    val credentials: Credentials?,
     /**
      * Token for token authentication. May be null if not used.
      */
+    val token: ByteArray?
+) {
+    @JvmOverloads
+    constructor(credentials: Credentials?, token: String? = null as String?) : this(
+        credentials,
+        token?.toByteArray()
+    )
 
-    @Nullable
-    public final byte[] token;
+    constructor(
+        username: String?,
+        password: String?,
+        token: String?
+    ) : this(if (username == null) null else Credentials(username, password), token)
 
-    public Authentication(@Nullable Credentials credentials, @Nullable byte[] token) {
-        this.credentials = credentials;
-        this.token = token;
-    }
+    constructor(
+        username: String?,
+        password: String?,
+        token: ByteArray?
+    ) : this(if (username == null) null else Credentials(username, password), token)
 
-    public Authentication(@Nullable Credentials credentials, @Nullable String token) {
-        this(credentials, token == null ? null : token.getBytes());
-    }
-
-    public Authentication(@Nullable String username, @Nullable String password, @Nullable String token) {
-        this(username == null ? null : new Credentials(username, password), token);
-    }
-
-    public Authentication(@Nullable String username, @Nullable String password, @Nullable byte[] token) {
-        this(username == null ? null : new Credentials(username, password), token);
-    }
-
-    public Authentication(@Nullable String username, @Nullable String password) {
-        this(username == null ? null : new Credentials(username, password), (String) null);
-    }
-
-    public Authentication(@Nullable Credentials credentials) {
-        this(credentials, (String) null);
-    }
+    constructor(
+        username: String?,
+        password: String?
+    ) : this(if (username == null) null else Credentials(username, password), null as String?)
 
     /**
      * Checks if token authentication is set.
      * @return true if token authentication is set, false otherwise.
      */
-
-    public boolean isToken() {
-        return token != null;
+    fun isToken(): Boolean {
+        return token != null
     }
 
     /**
      * Checks if basic authentication is set.
      * @return true if basic authentication is set, false otherwise.
      */
-
-    public boolean isCredentials() {
-        return credentials != null;
+    fun isCredentials(): Boolean {
+        return credentials != null
     }
 
-    /**
-     * Checks if no authentication data is set.
-     * @return true if no authentication data is set, false otherwise.
-     */
+    val isNone: Boolean
+        /**
+         * Checks if no authentication data is set.
+         * @return true if no authentication data is set, false otherwise.
+         */
+        get() = credentials == null && token == null
 
-    public boolean isNone() {
-        return credentials == null && token == null;
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (javaClass != other?.javaClass) return false
+
+        other as Authentication
+        if (credentials != other.credentials) return false
+        if (!token.contentEquals(other.token)) return false
+        if (isNone != other.isNone) return false
+        return true
     }
 
+    override fun hashCode(): Int {
+        var result = credentials?.hashCode() ?: 0
+        result = 31 * result + (token?.contentHashCode() ?: 0)
+        result = 31 * result + isNone.hashCode()
+        return result
+    }
 }

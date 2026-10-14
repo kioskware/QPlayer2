@@ -14,6 +14,7 @@ import androidx.annotation.Nullable;
 import com.fivesoft.qplayer.base.Csd;
 import com.fivesoft.qplayer.base.Frame;
 import com.fivesoft.qplayer.base.MediaDecoderException;
+import com.fivesoft.qplayer.base.QPlayer;
 import com.fivesoft.qplayer.base.Sample;
 import com.fivesoft.qplayer.base.UnsupportedSampleException;
 import com.fivesoft.qplayer.base.components.MediaDecoderOutput;
@@ -123,7 +124,7 @@ public class H264Decoder extends VideoDecoder {
 
     private volatile boolean ppsReceived, spsReceived = false;
 
-    private volatile boolean lowLatencyMode = true;
+    private volatile boolean lowLatencyMode = QPlayer.DEFAULT_LOW_LATENCY_MODE;
 
     private Bundle codecParams = new Bundle();
 
